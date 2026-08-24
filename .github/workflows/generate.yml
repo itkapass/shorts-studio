@@ -1,0 +1,84 @@
+name: Generate Video Drafts
+
+# ─────────────────────────────────────────────────────────────────
+# WORKFLOW 1: Generate Videos
+# Runs daily at 2:00 AM UTC (7:30 AM IST).
+# Generates up to 5 video drafts and queues them in Supabase.
+# Videos won't publish until you approve them in the Admin Panel.
+# ─────────────────────────────────────────────────────────────────
+
+on:
+  schedule:
+    - cron: '0 2 * * *'   # Every day at 2:00 AM UTC
+
+  # Also allows manual trigger from GitHub Actions tab (useful for testing)
+  workflow_dispatch:
+
+jobs:
+  generate:
+    name: Generate Video Drafts
+    runs-on: ubuntu-latest
+    timeout-minutes: 90   # Safety limit: prevent runaway builds
+
+    steps:
+      # ── 1. Checkout code ──────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Set up Python ──────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      # ── 3. Install system dependencies (FFmpeg) ───────────────────
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+
+      # ── 4. Install Python dependencies ────────────────────────────
+      - name: Install Python packages
+        run: pip install -r requirements.txt
+
+      # ── 5. Download Whisper model (cache between runs) ────────────
+      - name: Cache Whisper model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/whisper
+          key: whisper-tiny-model-v1
+
+      # ── 6. Run the generation pipeline ────────────────────────────
+      # NOTE: storage upload now happens INSIDE this step (engine/storage.py
+      # is called directly from orchestrator.py) — it used to be a separate,
+      # unguarded step below with no error handling, which also meant it
+      # only ever ran in this workflow and never for local/Docker runs. See
+      # engine/storage.py's docstring for the full story.
+      - name: Run video generation pipeline
+        env:
+          GEMINI_API_KEY:       ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL:         ${{ secrets.GEMINI_MODEL }}   # optional — leave the secret unset to use the code default
+          PEXELS_API_KEY:       ${{ secrets.PEXELS_API_KEY }}
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SUPABASE_ANON_KEY:    ${{ secrets.SUPABASE_ANON_KEY }}
+          OUTPUT_DIR:           /tmp/shorts_output
+          ASSETS_DIR:           assets
+        run: |
+          python -m engine.orchestrator
+
+      # ── 7. Safety net: retry-upload anything that didn't already upload ──
+      # orchestrator.py uploads each video right after rendering it (with
+      # retries — see engine/storage.py). This step just catches the rare
+      # case where a video rendered fine but the upload itself failed even
+      # after those retries, so a batch doesn't silently lose a video that
+      # only needed one more attempt.
+      - name: Retry any videos that failed to upload
+        if: always()
+        env:
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          OUTPUT_DIR:           /tmp/shorts_output
+        run: |
+          python -m engine.storage --all-pending

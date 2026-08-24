@@ -1,0 +1,39 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Environment variables (NEVER commit this file)
+.env
+
+# Output videos and temp files
+output/
+/tmp/
+
+# YouTube OAuth token (generated locally, stored as GitHub Secret)
+engine/youtube_token.pickle
+engine/youtube_client_secrets.json
+
+# Node / React
+node_modules/
+admin-panel/node_modules/
+admin-panel/dist/
+admin-panel/.env
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Whisper model cache (large, not needed in repo)
+# ~/.cache/whisper is cached by GitHub Actions separately
+
+# Clip cache (downloaded B-roll clips — can be re-fetched)
+output/clip_cache/
+
+engine/client_secret_870782039456-8ic0p6ro3ag93i4j0e4nrcngctludahg.apps.googleusercontent.com.json
+

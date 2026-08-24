@@ -1,0 +1,49 @@
+# Python Engine Dependencies
+# Install with: pip install -r requirements.txt
+
+# ── AI / LLM ──────────────────────────────────────────────────────
+# NOT google-generativeai — that package is fully end-of-life ("All support
+# for the google.generativeai package has ended", confirmed via its own
+# deprecation warning while testing this fix). google-genai is the current,
+# maintained SDK; see engine/script_generator.py.
+google-genai>=1.0.0
+
+# ── Text-to-Speech ─────────────────────────────────────────────────
+edge-tts>=7.0.0
+
+# ── Word-Level Timestamps (offline, no API cost) ───────────────────
+openai-whisper>=20230918
+
+# ── Video Processing ───────────────────────────────────────────────
+moviepy==1.0.3
+ffmpeg-python>=0.2.0
+
+# ── Image Processing (caption rendering) ──────────────────────────
+# IMPORTANT — read before "fixing" this pin:
+# moviepy==1.0.3's resize fx calls the PIL constant Image.ANTIALIAS,
+# which Pillow 10+ removed, crashing every scene that goes through
+# portrait-cropping. The real fix is in engine/styles/stock_footage.py:
+# it no longer calls moviepy's resize fx at all (does the resize with
+# PIL + Image.LANCZOS directly), so it works on any Pillow version.
+# Do NOT "fix" this by pinning Pillow<10 — on Python 3.12+ there are no
+# prebuilt wheels below 10.0, so pip falls back to a source build that
+# needs libjpeg/zlib headers and is slow/fragile in CI. Leave this open.
+Pillow>=9.0.0
+numpy>=1.24.0,<2.0.0
+
+# ── Database ───────────────────────────────────────────────────────
+supabase>=2.0.0
+
+# ── Duplicate-content detection (TF-IDF cosine similarity, no torch) ─
+scikit-learn>=1.3.0
+
+# ── HTTP Requests (Pexels API + Supabase Storage downloads) ───────
+requests>=2.31.0
+
+# ── YouTube Upload ─────────────────────────────────────────────────
+google-api-python-client>=2.100.0
+google-auth-oauthlib>=1.1.0
+google-auth-httplib2>=0.1.1
+
+# ── Environment Variables ──────────────────────────────────────────
+python-dotenv>=1.0.0

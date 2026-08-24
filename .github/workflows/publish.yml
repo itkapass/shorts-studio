@@ -1,0 +1,57 @@
+name: Publish Approved Videos
+
+# ─────────────────────────────────────────────────────────────────
+# WORKFLOW 2: Publish Videos
+# Runs every 30 minutes.
+# Picks the oldest "approved" video from Supabase and uploads it to YouTube.
+# Videos only get approved by you clicking "Approve" in the Admin Panel.
+# ─────────────────────────────────────────────────────────────────
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'   # Every 30 minutes
+
+  workflow_dispatch:           # Allow manual trigger from GitHub Actions tab
+
+jobs:
+  publish:
+    name: Publish to YouTube
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # ── 1. Checkout code ──────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Set up Python ──────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      # ── 3. Install Python dependencies ────────────────────────────
+      - name: Install Python packages
+        run: pip install -r requirements.txt
+
+      # ── 4. Run publish pipeline ────────────────────────────────────
+      # AUTH, FIXED: previously this step (and the two below it) existed to
+      # base64-decode a pickled OAuth token back to a local file before
+      # running, because publisher.py only knew how to read a local pickle
+      # file. publisher.py now reads YOUTUBE_CLIENT_ID/SECRET/REFRESH_TOKEN
+      # directly as plain env vars — same three values, no pickle/base64
+      # round-trip, and it's the same code path Docker and local runs use
+      # too. Get these three by running `python engine/publisher.py --setup`
+      # locally once — it prints them for you to paste in as secrets. See
+      # docs/04_AUTONOMOUS_YOUTUBE_PUBLISHING.md.
+      - name: Publish approved videos to YouTube
+        env:
+          SUPABASE_URL:           ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY:   ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SUPABASE_ANON_KEY:      ${{ secrets.SUPABASE_ANON_KEY }}
+          YOUTUBE_CLIENT_ID:      ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET:  ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN:  ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+        run: |
+          python -m engine.publish_approved

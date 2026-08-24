@@ -1,0 +1,71 @@
+name: Cleanup Old Storage
+
+# ─────────────────────────────────────────────────────────────────
+# WORKFLOW 3: Storage Cleanup
+# Runs every Sunday at midnight.
+# Deletes videos older than 7 days from Supabase Storage
+# to prevent hitting the 1GB free tier limit.
+# Published videos are always kept (just the storage file is removed).
+# ─────────────────────────────────────────────────────────────────
+
+on:
+  schedule:
+    - cron: '0 0 * * 0'   # Every Sunday at midnight UTC
+
+  workflow_dispatch:
+
+jobs:
+  cleanup:
+    name: Cleanup Storage
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install packages
+        run: pip install supabase python-dotenv
+
+      - name: Run cleanup
+        env:
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          python -c "
+          import os
+          from datetime import datetime, timedelta, timezone
+          from supabase import create_client
+
+          db = create_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_SERVICE_KEY'])
+
+          cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+
+          # Find old rejected/failed videos (no need to keep storage files)
+          old = db.table('videos') \
+                  .select('job_id, storage_url, status') \
+                  .in_('status', ['rejected', 'failed', 'published']) \
+                  .lt('created_at', cutoff) \
+                  .execute().data
+
+          deleted = 0
+          for row in old:
+              if not row.get('storage_url'):
+                  continue
+              try:
+                  storage_key = f'videos/{row[\"job_id\"]}.mp4'
+                  db.storage.from_('shorts-videos').remove([storage_key])
+                  db.table('videos').update({'storage_url': None}).eq('job_id', row['job_id']).execute()
+                  deleted += 1
+                  print(f'Deleted storage for: {row[\"job_id\"]}')
+              except Exception as e:
+                  print(f'Could not delete {row[\"job_id\"]}: {e}')
+
+          print(f'Cleanup complete. Deleted {deleted} storage files.')
+          "

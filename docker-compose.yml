@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  # Python Video Engine Service
+  engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: shorts-engine
+    env_file:
+      - .env
+    volumes:
+      - ./output:/app/output
+      - ./assets:/app/assets
+      - ./engine:/app/engine
+    environment:
+      - PYTHONUNBUFFERED=1
+
+  # React Admin Dashboard Service
+  admin-panel:
+    image: node:20-alpine
+    container_name: shorts-admin
+    working_dir: /app
+    volumes:
+      - ./admin-panel:/app
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_SUPABASE_URL=${SUPABASE_URL}
+      - VITE_SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
