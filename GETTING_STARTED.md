@@ -113,4 +113,14 @@ What happens automatically:
 ## ☁️ Stage 4: 100% Autonomous 24/7 Cloud Pipeline ($0/Month)
 
 If you want the pipeline to run automatically every day on GitHub Actions without keeping your computer on:
-* Follow the detailed steps in `DEVOPS_PLAYBOOK.md` (and `docs/04` for the current YouTube auth flow).
+* Follow `docs/04_AUTONOMOUS_YOUTUBE_PUBLISHING.md` — this is the current version;
+  `DEVOPS_PLAYBOOK.md` is kept for reference but has an outdated YouTube auth section.
+
+## 🌍 Stage 5: Access It From Anywhere (No Local Computer Needed)
+
+Stage 1 above runs the dashboard on *your* machine (`npm run dev`). To get a real URL
+you can open from your phone or any browser, any time — and to render on-demand
+videos without your computer being on at all — see
+`docs/05_DEPLOY_THE_DASHBOARD.md`. Short version: deploy `admin-panel/` to Vercel
+(free), and the scheduled generation/publishing from Stage 4 already runs in GitHub's
+cloud with no further setup either way.

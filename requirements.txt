@@ -29,7 +29,15 @@ ffmpeg-python>=0.2.0
 # prebuilt wheels below 10.0, so pip falls back to a source build that
 # needs libjpeg/zlib headers and is slow/fragile in CI. Leave this open.
 Pillow>=9.0.0
-numpy>=1.24.0,<2.0.0
+# NOT numpy<2.0.0 — a previous version of this file capped numpy below 2.0,
+# out of caution around moviepy 1.0.3 possibly not supporting it. Tested
+# directly: moviepy 1.0.3 renders correctly under numpy 2.x. The cap was
+# actively harmful in practice — on newer Python versions (confirmed on
+# 3.14), there's no prebuilt wheel for numpy 1.26.4 (the last 1.x release,
+# which predates 3.14 entirely), so pip fell back to a source build that
+# then failed outright without a C compiler installed. Whatever numpy
+# torch/whisper already pulled in works fine; don't force a downgrade.
+numpy>=1.24.0
 
 # ── Database ───────────────────────────────────────────────────────
 supabase>=2.0.0

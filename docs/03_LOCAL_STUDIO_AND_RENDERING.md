@@ -4,6 +4,50 @@ This guide covers running the interactive Web Dashboard and generating high-rete
 
 ---
 
+## ⚠️ 0. System Requirement: ffmpeg (read this before you hit `[WinError 2]`)
+
+Both Whisper (caption timing) and MoviePy (final rendering) shell out to the real
+**ffmpeg program** — not a Python package, an actual executable on your system PATH.
+`pip install -r requirements.txt` installs Python packages like `ffmpeg-python`, which
+is just a wrapper — it does **not** install ffmpeg itself. Skipping this step is the
+single most common way to hit this, deep in a Whisper traceback:
+```
+FileNotFoundError: [WinError 2] The system cannot find the file specified
+```
+That error means exactly one thing: ffmpeg isn't on PATH. Fix:
+
+**Windows:**
+```powershell
+winget install ffmpeg
+```
+Then **open a brand new terminal window** — this is the part people miss. PATH
+changes from an installer don't apply to a terminal that was already open before you
+ran it; your existing PowerShell/Command Prompt window won't see it until you close
+and reopen it (or restart your IDE's integrated terminal).
+
+**macOS:**
+```bash
+brew install ffmpeg
+```
+
+**Linux:**
+```bash
+sudo apt-get install ffmpeg
+```
+
+**Verify it worked** (in whichever terminal you'll actually run the pipeline from):
+```
+ffmpeg -version
+```
+If that prints a version number, you're set. If it says "not recognized" / "command
+not found", the install didn't complete or you're still in an old terminal session.
+
+(GitHub Actions and Docker already install this automatically — `generate.yml`,
+`publish.yml`, and the `Dockerfile` each have their own explicit ffmpeg install step.
+This is specifically about running things directly on your own machine.)
+
+---
+
 ## 🖥️ 1. Running the Web Studio Dashboard
 
 1. Open PowerShell or Command Prompt.

@@ -16,6 +16,20 @@ then update every place that used the old ones (GitHub Secrets, Vercel env vars,
 your local `.env`). This build doesn't ship any real `.env` file — only `.env.example`
 with placeholders — on purpose; see "New rule" at the bottom of this file.
 
+- **`numpy<2.0.0` broke installs on newer Python (confirmed on 3.14).** That upper
+  bound was added out of caution around moviepy 1.0.3 possibly not supporting numpy
+  2.x — tested directly, it renders fine under numpy 2.x. The cap was actively
+  harmful: newer Python versions have no prebuilt wheel for numpy 1.26.4 (the last
+  1.x release, which predates them), so pip fell back to compiling from source and
+  failed without a C compiler installed. Removed the upper bound.
+- **A missing local ffmpeg install surfaced as a bare `[WinError 2]`.** Whisper and
+  MoviePy both need the real ffmpeg program on PATH, not just the `ffmpeg-python`
+  Python package — this was never actually documented for local (non-Docker,
+  non-Actions) use. `engine/voice_engine.py` now checks for it up front and raises a
+  clear, actionable error instead of a cryptic traceback 20 seconds into a run; see
+  `docs/03`'s new prerequisites section for install steps per OS (Windows needs a
+  fresh terminal after installing — PATH changes don't reach already-open ones).
+
 ## Fixed: things that were silently broken
 
 - **The video pipeline couldn't render a single real clip.** `moviepy==1.0.3`'s crop
@@ -106,6 +120,21 @@ with placeholders — on purpose; see "New rule" at the bottom of this file.
   and scripts were explicitly prompted toward wealth/CPM-chasing framing. Both walked
   back — the prompt now explicitly asks for genuine reasons to keep watching instead
   of empty engagement-bait, which YouTube's spam policies discourage anyway.
+
+## Added: deploy the dashboard, render without your own computer
+
+Not something fixed so much as a genuine gap in what was ever documented: nothing
+before explained how to get the Admin Panel online, or that the scheduled pipeline
+already runs entirely in GitHub's cloud with no computer needed. See
+`docs/05_DEPLOY_THE_DASHBOARD.md` for the full picture. Also new:
+
+- **`.github/workflows/render-on-demand.yml`** — a `workflow_dispatch`-triggered
+  workflow that renders one specific `queued_for_render` job.
+- **`supabase/functions/trigger-render`** — a new Edge Function the deployed
+  dashboard calls to kick that workflow off remotely (holding a scoped GitHub PAT
+  server-side, never in the browser — same pattern as every other credential in this
+  project). The Create Video page's "Render in Cloud" button uses this; "render
+  locally instead" is still there if you'd rather.
 
 ## Added: multiple render styles (the actual feature request)
 

@@ -34,6 +34,3 @@ Thumbs.db
 
 # Clip cache (downloaded B-roll clips — can be re-fetched)
 output/clip_cache/
-
-engine/client_secret_870782039456-8ic0p6ro3ag93i4j0e4nrcngctludahg.apps.googleusercontent.com.json
-

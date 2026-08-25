@@ -1,0 +1,71 @@
+name: Render On-Demand Video
+
+# Renders ONE specific job_id that already has a storyboard saved (status
+# 'queued_for_render') — e.g. from the Admin Panel's Create Video page.
+#
+# NEW: this is what closes the "do I need my own computer running" gap.
+# Before this, the only way to render a storyboard you built in the Admin
+# Panel was to copy a command and run it on your own machine (see
+# CreateVideo.jsx's "Copy Render Command" button, still there as a
+# fallback). This workflow lets the deployed (Vercel) Admin Panel trigger
+# the same render in GitHub's cloud instead — see the "Render in Cloud"
+# button, which calls the trigger-render Edge Function, which calls this
+# workflow's dispatch API. Same compute GitHub already gives you for free
+# for the scheduled generate/publish workflows, just triggered on demand.
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: 'job_id of the queued_for_render video to render'
+        required: true
+        type: string
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore Whisper model cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/whisper
+          key: whisper-tiny-model-v1
+
+      - name: Render the requested job
+        env:
+          GEMINI_API_KEY:       ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL:         ${{ secrets.GEMINI_MODEL }}
+          PEXELS_API_KEY:       ${{ secrets.PEXELS_API_KEY }}
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SUPABASE_ANON_KEY:    ${{ secrets.SUPABASE_ANON_KEY }}
+          OUTPUT_DIR:           /tmp/shorts_output
+          ASSETS_DIR:           assets
+        run: |
+          python -m engine.orchestrator --render-job "${{ inputs.job_id }}"
+
+      - name: Retry upload if it didn't already succeed
+        if: always()
+        env:
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          OUTPUT_DIR:           /tmp/shorts_output
+        run: |
+          python -m engine.storage --job-id "${{ inputs.job_id }}" || true

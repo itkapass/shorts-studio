@@ -131,6 +131,7 @@ export default function VideoQueue() {
       <div style={{ display: 'flex', gap: 8, marginBottom: 24 }}>
         {[
           { id: 'queued_for_render', label: 'Awaiting Render' },
+          { id: 'rendering', label: 'Rendering' },
           { id: 'pending', label: 'Pending Review' },
           { id: 'approved', label: 'Approved & Scheduled' },
           { id: 'published', label: 'Published' },
@@ -204,10 +205,17 @@ export default function VideoQueue() {
                         <span style={{ display: 'block', fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: 8 }}>
                           {video.status === 'failed' || video.status === 'publish_failed'
                             ? 'Render/Upload Failed'
+                            : video.status === 'rendering'
+                            ? 'Rendering in the cloud…'
                             : video.status === 'queued_for_render'
                             ? 'Not rendered yet'
                             : 'No Preview URL'}
                         </span>
+                        {video.status === 'rendering' && (
+                          <span style={{ display: 'block', fontSize: '0.62rem', marginTop: 6, color: 'var(--text-muted)' }}>
+                            Usually a few minutes — refresh to check
+                          </span>
+                        )}
                         {video.status === 'queued_for_render' && (
                           <code style={{ display: 'block', fontSize: '0.62rem', marginTop: 6, color: 'var(--text-muted)', wordBreak: 'break-all' }}>
                             orchestrator --render-job {video.job_id}

@@ -15,6 +15,7 @@ import asyncio
 import difflib
 import json
 import os
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -22,6 +23,35 @@ import edge_tts
 import whisper
 
 from engine.config import get
+
+
+def _require_ffmpeg():
+    """Whisper (and moviepy, later in the pipeline) both shell out to the
+    ffmpeg binary — not the ffmpeg-python or edge-tts Python packages, an
+    actual system executable on PATH. Missing it is one of the single most
+    common local setup failures for this kind of project, especially on
+    Windows, where it doesn't come preinstalled the way it typically does
+    in Docker/CI Linux images (this project's own Dockerfile and GitHub
+    Actions workflows install it explicitly for exactly that reason).
+
+    Without this check, a missing ffmpeg surfaces ~20 seconds later as a
+    bare `FileNotFoundError: [WinError 2] The system cannot find the file
+    specified` from deep inside Whisper's internals — technically correct,
+    not remotely obvious what it means. This fails immediately, before
+    spending time on TTS + downloading the Whisper model, with a message
+    that says what to actually do about it.
+    """
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError(
+            "ffmpeg was not found on your system PATH. Both Whisper (for caption timing) and "
+            "MoviePy (for final rendering) need the real ffmpeg program installed, not just a "
+            "Python package.\n"
+            "Windows: winget install ffmpeg   (then OPEN A NEW terminal — PATH changes don't "
+            "apply to already-open ones)\n"
+            "macOS:   brew install ffmpeg\n"
+            "Linux:   sudo apt-get install ffmpeg\n"
+            "Verify with: ffmpeg -version   — see docs/02_FREE_AI_API_KEYS.md."
+        )
 
 # ─── Voice Profiles ──────────────────────────────────────────────────────────
 # These map "voice_profile" names (set in Admin Panel) to Edge-TTS voice IDs.
@@ -74,6 +104,8 @@ def generate_voiceover(
     """
     if output_dir is None:
         output_dir = get("OUTPUT_DIR", "output")
+
+    _require_ffmpeg()
     
     os.makedirs(output_dir, exist_ok=True)
     audio_path = os.path.join(output_dir, f"{job_id}_voice.mp3")

@@ -79,6 +79,8 @@ export default function CreateVideo() {
   const [genError, setGenError] = useState(null)
   const [copiedCmd, setCopiedCmd] = useState(false)
   const [lastJobId, setLastJobId] = useState(null)
+  const [isTriggering, setIsTriggering] = useState(false)
+  const [triggerResult, setTriggerResult] = useState(null) // { ok, message, actions_url } | { error }
 
   async function handleGenerateStoryboard() {
     if (!prompt.trim()) return
@@ -152,6 +154,24 @@ export default function CreateVideo() {
     navigator.clipboard.writeText(cmd)
     setCopiedCmd(true)
     setTimeout(() => setCopiedCmd(false), 3000)
+  }
+
+  // NEW: renders in GitHub Actions instead of requiring your own machine —
+  // see supabase/functions/trigger-render. Needs GITHUB_PAT + GITHUB_REPO
+  // set as that function's secrets (docs/05_DEPLOY_THE_DASHBOARD.md).
+  async function handleRenderInCloud() {
+    if (!lastJobId) return
+    setIsTriggering(true)
+    setTriggerResult(null)
+    const { data, error } = await supabase.functions.invoke('trigger-render', {
+      body: { job_id: lastJobId },
+    })
+    setIsTriggering(false)
+    if (error || data?.error) {
+      setTriggerResult({ error: data?.error || error?.message || 'Could not reach the trigger-render function.' })
+      return
+    }
+    setTriggerResult(data)
   }
 
   return (
@@ -313,17 +333,52 @@ export default function CreateVideo() {
                 ) : (
                   <div>
                     <p style={{ fontSize: '0.85rem', marginBottom: 10 }}>
-                      Saved. This storyboard is <strong>not rendered yet</strong> — run the command below (needs your
-                      real API keys locally, or trigger the generate workflow) to actually produce the video:
+                      Saved. This storyboard is <strong>not rendered yet</strong>.
                     </p>
-                    <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                      <code style={{ background: 'var(--bg-secondary, #161b27)', padding: '8px 12px', borderRadius: 6, fontSize: '0.8rem' }}>
-                        python -m engine.orchestrator --render-job {lastJobId}
-                      </code>
-                      <button className="btn btn-secondary" onClick={copyRenderCommand}>
-                        {copiedCmd ? <CheckCircle2 size={16} color="var(--accent-green)" /> : <Copy size={16} />}
-                        {copiedCmd ? 'Copied!' : 'Copy'}
-                      </button>
+
+                    {!triggerResult?.ok && (
+                      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
+                        <button className="btn btn-primary" onClick={handleRenderInCloud} disabled={isTriggering}>
+                          {isTriggering ? 'Starting…' : (<><Sparkles size={16} /> Render in Cloud</>)}
+                        </button>
+                        <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                          Runs on GitHub Actions — no need to keep your own computer on.
+                        </span>
+                      </div>
+                    )}
+
+                    {triggerResult?.ok && (
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', background: 'rgba(46,160,67,0.1)', border: '1px solid rgba(46,160,67,0.3)', borderRadius: 8, padding: '10px 12px', marginBottom: 12, fontSize: '0.82rem' }}>
+                        <CheckCircle2 size={16} color="var(--accent-green)" />
+                        Render started in the cloud — usually a few minutes. It'll show up in the Video Queue as "Rendering", then "Pending Review" once done.
+                        {triggerResult.actions_url && (
+                          <a href={triggerResult.actions_url} target="_blank" rel="noreferrer" style={{ marginLeft: 4 }}>Watch progress →</a>
+                        )}
+                      </div>
+                    )}
+                    {triggerResult?.error && (
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', background: 'rgba(220,50,50,0.1)', border: '1px solid rgba(220,50,50,0.3)', borderRadius: 8, padding: '10px 12px', marginBottom: 12, fontSize: '0.8rem' }}>
+                        <AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 2 }} />
+                        <span>{triggerResult.error}</span>
+                      </div>
+                    )}
+
+                    <details>
+                      <summary style={{ fontSize: '0.78rem', color: 'var(--text-muted)', cursor: 'pointer' }}>
+                        Or render locally instead
+                      </summary>
+                      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: 10 }}>
+                        <code style={{ background: 'var(--bg-secondary, #161b27)', padding: '8px 12px', borderRadius: 6, fontSize: '0.8rem' }}>
+                          python -m engine.orchestrator --render-job {lastJobId}
+                        </code>
+                        <button className="btn btn-secondary" onClick={copyRenderCommand}>
+                          {copiedCmd ? <CheckCircle2 size={16} color="var(--accent-green)" /> : <Copy size={16} />}
+                          {copiedCmd ? 'Copied!' : 'Copy'}
+                        </button>
+                      </div>
+                    </details>
+
+                    <div style={{ marginTop: 14 }}>
                       <button className="btn btn-secondary" onClick={() => navigate('/queue')}>Go to Video Queue</button>
                     </div>
                   </div>
