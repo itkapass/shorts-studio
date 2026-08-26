@@ -16,7 +16,7 @@
 
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { supabase } from '../lib/supabase'
+import { supabase, getFunctionErrorMessage } from '../lib/supabase'
 import { Flame, ArrowRight, Wand2, Eye, RefreshCw, AlertTriangle, ExternalLink } from 'lucide-react'
 
 function formatViews(n) {
@@ -48,7 +48,7 @@ export default function TrendingRadar() {
     setIsScanning(false)
 
     if (fnError || data?.error) {
-      setError(data?.error || fnError?.message || 'Could not reach the discover-trends function.')
+      setError(await getFunctionErrorMessage(fnError, data, 'Could not reach the discover-trends function.'))
       setResults([])
       return
     }

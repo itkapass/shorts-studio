@@ -30,6 +30,9 @@ with placeholders — on purpose; see "New rule" at the bottom of this file.
   `docs/03`'s new prerequisites section for install steps per OS (Windows needs a
   fresh terminal after installing — PATH changes don't reach already-open ones).
 
+- **A single "high demand" response from Gemini killed that video outright, with zero retries.** Confirmed live: `503 UNAVAILABLE... This model is currently experiencing high demand` failed 5/5 videos in one run, and the identical error hit the `generate-storyboard` Edge Function too. Google's own message calls it temporary, but nothing ever retried — one bad moment lost the whole video. Both `engine/script_generator.py` and the Edge Function now retry transient errors (503/500/429) with exponential backoff (3s → 6s → 12s → 24s) before giving up; permanent errors (404 bad model, bad request) still fail immediately rather than wasting time retrying something a retry can't fix.
+- **Edge Function errors were always showing the same generic message, hiding the real reason.** `supabase.functions.invoke()` doesn't put a failed function's own JSON error body where you'd expect (`data`) — it's behind `error.context` (a Response you have to `.json()` yourself), confirmed straight from `@supabase/functions-js`'s source. Every call site was showing "Edge Function returned a non-2xx status code" no matter what actually went wrong underneath, including the retryable-503 case above. Added `getFunctionErrorMessage()` in `src/lib/supabase.js`, used everywhere an Edge Function gets called, so the actual reason reaches the screen.
+
 ## Fixed: things that were silently broken
 
 - **The video pipeline couldn't render a single real clip.** `moviepy==1.0.3`'s crop

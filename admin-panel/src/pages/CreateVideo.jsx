@@ -15,7 +15,7 @@
 
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { supabase } from '../lib/supabase'
+import { supabase, getFunctionErrorMessage } from '../lib/supabase'
 import {
   Sparkles, Wand2, Film, Mic, CheckCircle2, Copy, ArrowRight,
   Volume2, AlertTriangle, PenLine,
@@ -103,7 +103,8 @@ export default function CreateVideo() {
     setIsGenerating(false)
 
     if (error || data?.error) {
-      setGenError(data?.error || error?.message || 'Generation failed — check that the generate-storyboard function is deployed and GEMINI_API_KEY is set as its secret.')
+      setGenError(await getFunctionErrorMessage(error, data,
+        'Generation failed — check that the generate-storyboard function is deployed and GEMINI_API_KEY is set as its secret.'))
       return
     }
     setStoryboard(data.storyboard)
@@ -168,7 +169,7 @@ export default function CreateVideo() {
     })
     setIsTriggering(false)
     if (error || data?.error) {
-      setTriggerResult({ error: data?.error || error?.message || 'Could not reach the trigger-render function.' })
+      setTriggerResult({ error: await getFunctionErrorMessage(error, data, 'Could not reach the trigger-render function.') })
       return
     }
     setTriggerResult(data)

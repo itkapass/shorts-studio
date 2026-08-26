@@ -38,3 +38,25 @@ export const supabase = isSupabaseConfigured
       }
     }
 
+// FIXED: when an Edge Function returns a non-2xx status, supabase-js does
+// NOT put the function's own JSON error body in `data` — it throws a
+// FunctionsHttpError whose useful content is behind `error.context` (the
+// raw Response), confirmed straight from @supabase/functions-js's own
+// source. Every call site that just did `data?.error || error?.message`
+// only ever showed the generic "Edge Function returned a non-2xx status
+// code" — this is why the retryable-503 fix (see generate-storyboard)
+// wasn't visibly reaching users; the specific reason was always being
+// discarded. Use this everywhere an Edge Function call might fail.
+export async function getFunctionErrorMessage(error, data, fallback) {
+  if (data?.error) return data.error
+  if (error && typeof error?.context?.json === 'function') {
+    try {
+      const body = await error.context.json()
+      if (body?.error) return body.error
+    } catch {
+      // context wasn't JSON (e.g. a network-level FunctionsFetchError) — fall through
+    }
+  }
+  return error?.message || fallback || 'Something went wrong calling the Edge Function.'
+}
+

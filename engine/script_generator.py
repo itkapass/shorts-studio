@@ -36,8 +36,9 @@ FIXED (see PROJECT review notes):
 
 import json
 import re
+import time
 from google import genai
-from google.genai import types
+from google.genai import types, errors
 from engine.config import require, get
 from engine.styles.icon_library import available_icon_names
 
@@ -48,6 +49,17 @@ from engine.styles.icon_library import available_icon_names
 # current lineup and https://ai.google.dev/gemini-api/docs/deprecations
 # before assuming this default still resolves.
 DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
+
+# HTTP codes worth retrying: transient server-side conditions that usually
+# clear up within seconds (confirmed in practice — "503 UNAVAILABLE...
+# currently experiencing high demand" killed every single video in a batch
+# with zero retries before this fix, even though it's explicitly described
+# as temporary). NOT retried: 404 (bad/deprecated model name), 400 (bad
+# request), 403 (bad API key) — retrying those just wastes time on
+# something a retry can't fix.
+RETRYABLE_CODES = {503, 500, 429}
+MAX_RETRIES = 4
+RETRY_BACKOFF_SECONDS = 3  # doubles each attempt: 3s, 6s, 12s, 24s
 
 
 def _get_client():
@@ -64,28 +76,38 @@ def _get_client():
 
 
 def _call_model_with_clear_errors(client, model_name, system_prompt, user_prompt):
-    try:
-        return client.models.generate_content(
-            model=model_name,
-            contents=user_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                response_mime_type="application/json",
-                temperature=0.9,
-                top_p=0.95,
-            ),
-        )
-    except Exception as e:
-        msg = str(e).lower()
-        if "not found" in msg or "404" in msg or "deprecated" in msg:
-            raise RuntimeError(
-                f"Gemini model call failed, likely because the model name is no longer "
-                f"available: {e}\n"
-                f"Fix: set GEMINI_MODEL to a currently-supported model name. Check "
-                f"https://ai.google.dev/gemini-api/docs/models for the current lineup. "
-                f"This project's default is '{model_name}'."
-            ) from e
-        raise
+    last_error = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            return client.models.generate_content(
+                model=model_name,
+                contents=user_prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    response_mime_type="application/json",
+                    temperature=0.9,
+                    top_p=0.95,
+                ),
+            )
+        except errors.APIError as e:
+            last_error = e
+            code = getattr(e, "code", None)
+            if code == 404 or "not found" in str(e).lower() or "deprecated" in str(e).lower():
+                raise RuntimeError(
+                    f"Gemini model call failed, likely because the model name is no longer "
+                    f"available: {e}\n"
+                    f"Fix: set GEMINI_MODEL to a currently-supported model name. Check "
+                    f"https://ai.google.dev/gemini-api/docs/models for the current lineup. "
+                    f"This project's default is '{model_name}'."
+                ) from e
+            if code in RETRYABLE_CODES and attempt < MAX_RETRIES:
+                wait = RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1))
+                print(f"[script_generator] \u26a0 Gemini returned {code} (attempt {attempt}/{MAX_RETRIES}), "
+                      f"this is usually temporary — retrying in {wait}s...")
+                time.sleep(wait)
+                continue
+            raise
+    raise last_error
 
 
 # ─── Prompt Templates ────────────────────────────────────────────────────────

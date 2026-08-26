@@ -21,6 +21,13 @@ import { requireUser, jsonResponse, CORS_HEADERS } from "../_shared/auth.ts";
 import { ICON_NAMES } from "../_shared/icons.ts";
 
 const DEFAULT_MODEL = "gemini-3.5-flash"; // keep in sync with engine/script_generator.py
+const RETRYABLE_STATUS = new Set([503, 500, 429]);
+const MAX_RETRIES = 4;
+const RETRY_BACKOFF_MS = 3000; // doubles each attempt: 3s, 6s, 12s, 24s
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function buildSystemPrompt(renderStyle: string, numScenes: number): string {
   let visualField: string;
@@ -92,34 +99,51 @@ async function callGemini(systemPrompt: string, userPrompt: string) {
   if (!apiKey) throw new Error("GEMINI_API_KEY not configured as an Edge Function secret.");
   const model = Deno.env.get("GEMINI_MODEL") || DEFAULT_MODEL;
 
-  const resp = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: userPrompt }] }],
-        systemInstruction: { parts: [{ text: systemPrompt }] },
-        generationConfig: { temperature: 0.9, topP: 0.95, responseMimeType: "application/json" },
-      }),
-    },
-  );
+  let lastErrorText = "";
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    const resp = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+          systemInstruction: { parts: [{ text: systemPrompt }] },
+          generationConfig: { temperature: 0.9, topP: 0.95, responseMimeType: "application/json" },
+        }),
+      },
+    );
 
-  if (!resp.ok) {
+    if (resp.ok) {
+      const data = await resp.json();
+      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) throw new Error(`Gemini returned no text. Raw response: ${JSON.stringify(data).slice(0, 500)}`);
+      return text;
+    }
+
     const body = await resp.text();
+    lastErrorText = body;
+
     if (resp.status === 404 || body.toLowerCase().includes("not found")) {
       throw new Error(
         `Gemini model '${model}' not found (${resp.status}). It's likely been deprecated — set the ` +
         `GEMINI_MODEL secret to a current model from https://ai.google.dev/gemini-api/docs/models. Raw: ${body}`,
       );
     }
+
+    // Confirmed in practice: Gemini's "503 UNAVAILABLE... currently
+    // experiencing high demand" killed every request with zero retries
+    // before this fix, despite Google's own message calling it temporary.
+    if (RETRYABLE_STATUS.has(resp.status) && attempt < MAX_RETRIES) {
+      const wait = RETRY_BACKOFF_MS * 2 ** (attempt - 1);
+      console.log(`Gemini returned ${resp.status} (attempt ${attempt}/${MAX_RETRIES}), retrying in ${wait}ms...`);
+      await sleep(wait);
+      continue;
+    }
+
     throw new Error(`Gemini API error ${resp.status}: ${body}`);
   }
-
-  const data = await resp.json();
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error(`Gemini returned no text. Raw response: ${JSON.stringify(data).slice(0, 500)}`);
-  return text;
+  throw new Error(`Gemini API error after ${MAX_RETRIES} attempts: ${lastErrorText}`);
 }
 
 Deno.serve(async (req: Request) => {
