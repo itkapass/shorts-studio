@@ -33,6 +33,23 @@ with placeholders — on purpose; see "New rule" at the bottom of this file.
 - **A single "high demand" response from Gemini killed that video outright, with zero retries.** Confirmed live: `503 UNAVAILABLE... This model is currently experiencing high demand` failed 5/5 videos in one run, and the identical error hit the `generate-storyboard` Edge Function too. Google's own message calls it temporary, but nothing ever retried — one bad moment lost the whole video. Both `engine/script_generator.py` and the Edge Function now retry transient errors (503/500/429) with exponential backoff (3s → 6s → 12s → 24s) before giving up; permanent errors (404 bad model, bad request) still fail immediately rather than wasting time retrying something a retry can't fix.
 - **Edge Function errors were always showing the same generic message, hiding the real reason.** `supabase.functions.invoke()` doesn't put a failed function's own JSON error body where you'd expect (`data`) — it's behind `error.context` (a Response you have to `.json()` yourself), confirmed straight from `@supabase/functions-js`'s source. Every call site was showing "Edge Function returned a non-2xx status code" no matter what actually went wrong underneath, including the retryable-503 case above. Added `getFunctionErrorMessage()` in `src/lib/supabase.js`, used everywhere an Edge Function gets called, so the actual reason reaches the screen.
 
+- **A silent ~2 second cut to solid black, mid-sentence, at scene boundaries.**
+  Found by inspecting real generated output frame-by-frame, not by reading code:
+  a scene's background would end, the next one's would start slightly later, and
+  for that gap `CompositeVideoClip` shows its default canvas — solid black —
+  while the caption (timed independently, straight off word timestamps) kept
+  playing right through it, since nothing about it was actually broken. This
+  happened even with the difflib alignment fix from earlier, because each
+  scene's boundary was still computed independently — nothing forced scene N's
+  end to exactly equal scene N+1's start. Fixed two ways: `get_scene_timestamps()`
+  now forces exact contiguity as a final pass (no gap can exist by
+  construction), and `compose_video()` adds a cheap flat-color base layer under
+  everything as a second line of defense, so any future timing edge case shows
+  a plain color for a moment instead of a black hole. Verified both
+  independently — fed deliberately-gapped data straight into the compositor to
+  confirm the base layer catches it, and fed deliberately-misaligned transcript
+  data into the timestamp function to confirm it no longer produces a gap.
+
 ## Fixed: things that were silently broken
 
 - **The video pipeline couldn't render a single real clip.** `moviepy==1.0.3`'s crop

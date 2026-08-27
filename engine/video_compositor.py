@@ -30,7 +30,7 @@ import os
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from moviepy.editor import (
-    ImageClip, AudioFileClip, CompositeVideoClip,
+    ImageClip, AudioFileClip, CompositeVideoClip, ColorClip,
 )
 from engine.subtitle_engine import CaptionCard, CaptionStyle
 from engine.styles import get_style, DEFAULT_STYLE
@@ -39,6 +39,15 @@ from engine.styles import get_style, DEFAULT_STYLE
 # on why this matters with this project's pinned moviepy==1.0.3.
 if not hasattr(Image, "ANTIALIAS"):
     Image.ANTIALIAS = Image.LANCZOS
+
+# Used only as an emergency base layer (see compose_video Step 1) — matches
+# each style's general palette so it's inconspicuous in the rare case it's
+# ever visible at all.
+_FALLBACK_COLOR = {
+    "stock_footage": (10, 10, 18),
+    "whiteboard_sketch": (250, 248, 240),
+    "quote_card": (10, 10, 18),
+}
 
 
 # ─── Video Spec Constants (YouTube Shorts) ─────────────────────────────────────
@@ -89,8 +98,21 @@ def compose_video(
     print(f"[video_compositor] Starting composition: {total_duration:.1f}s video, "
           f"{len(scenes_with_clips)} scenes, style='{render_style}'")
 
-    # ── Step 1: Build per-scene background clips (style-specific) ─────────────
-    background_clips = []
+    # ── Step 1: Full-duration base layer (defense-in-depth, cheap on purpose) ─
+    # get_scene_timestamps() now forces scenes to be perfectly contiguous
+    # (see engine/voice_engine.py), which is the real fix for the black-hole
+    # bug this guards against. This stays as a second line of defense: if
+    # any future change reintroduces a gap in per-scene coverage, the worst
+    # case becomes "a plain color shows for a moment" instead of "solid
+    # black mid-sentence" — CompositeVideoClip's canvas for any time
+    # position nothing covers is solid black, full stop. Deliberately a
+    # flat static color, not the full style renderer run a second time —
+    # this sits fully hidden under real content for the entire video in the
+    # normal case, so it isn't worth paying render cost for anything fancier.
+    base_color = _FALLBACK_COLOR.get(render_style, (15, 15, 20))
+    background_clips = [ColorClip(size=(VIDEO_WIDTH, VIDEO_HEIGHT), color=base_color).set_duration(total_duration)]
+
+    # ── Step 2: Build per-scene background clips (style-specific) ─────────────
     for scene in scenes_with_clips:
         scene_start = scene.get("time_start", 0)
         scene_end   = scene.get("time_end", total_duration)

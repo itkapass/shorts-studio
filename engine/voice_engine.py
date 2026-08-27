@@ -220,6 +220,26 @@ def get_scene_timestamps(word_timestamps: list, scenes: list) -> list:
             "time_end":   word_timestamps[word_end_idx]["end"],
         })
 
+    # FIXED: confirmed by inspecting rendered output frame-by-frame — even
+    # with real alignment (above) instead of pure proportional guessing,
+    # adjacent scenes' independently-computed boundaries don't always touch
+    # exactly. The result wasn't a crash or an obviously-wrong cut; it was a
+    # ~2 second hole where NO background clip was scheduled at all.
+    # CompositeVideoClip's canvas for time no clip covers is solid black,
+    # and captions are timed separately from scene boundaries (directly off
+    # word timestamps), so the caption kept playing right through it —
+    # which is exactly what made it look like a clean, silent cut to a
+    # black screen mid-sentence instead of an obvious glitch. Force perfect
+    # contiguity as a final pass: every scene's end IS the next scene's
+    # start, full stop, so there is no time position any background clip
+    # doesn't cover.
+    for i in range(len(scenes_enriched) - 1):
+        scenes_enriched[i]["time_end"] = scenes_enriched[i + 1]["time_start"]
+    if scenes_enriched:
+        scenes_enriched[-1]["time_end"] = max(
+            scenes_enriched[-1]["time_end"], word_timestamps[-1]["end"]
+        )
+
     return scenes_enriched
 
 
