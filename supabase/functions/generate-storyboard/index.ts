@@ -45,8 +45,15 @@ function buildSystemPrompt(renderStyle: string, numScenes: number): string {
   } else {
     visualField = '"visual_keyword": "Specific stock footage search phrase (e.g. \'silicon wafer cleanroom glow\', ' +
       "'server room blue light corridor')\"";
-    visualRule = "5. VISUALS: provide a specific, concrete stock-footage search phrase per scene — specific " +
-      "enough that a real b-roll clip will visually match the sentence being spoken.";
+    visualRule = "5. VISUALS: stock footage sites only have real footage of real, physical things — " +
+      "machines, wires, factories, hardware, environments. They do NOT have footage of abstract " +
+      "ideas (a 'concept', a 'mechanism', 'data flowing', 'the internet'). For every scene, name a " +
+      "concrete, physical, filmable subject — if the sentence is about something abstract, pick the " +
+      "closest real object/place/action a camera could actually point at (e.g. for 'the algorithm " +
+      "decides' use 'server rack blinking lights close up', not 'algorithm decision visualization'). " +
+      "Never describe a person wearing/modeling equipment (goggles, lab coats, gloves) as the main " +
+      "subject — stock sites return generic portrait/lifestyle photography for those, not the " +
+      "technical subject you actually want. Prefer machines, objects, and environments over people.";
   }
 
   const sceneFields = [

@@ -42,7 +42,8 @@ def fetch_clip_for_scene(
     visual_keyword: str,
     duration_needed: float,
     job_id: str = "job",
-    scene_number: int = 1
+    scene_number: int = 1,
+    exclude_video_ids: set = None,
 ) -> dict:
     """
     Fetches the best matching video clip for a scene's visual keyword.
@@ -52,28 +53,40 @@ def fetch_clip_for_scene(
         duration_needed: How many seconds this scene needs (clip will be looped if shorter)
         job_id:         Unique job identifier for file naming
         scene_number:   Scene index (for logging)
+        exclude_video_ids: Pexels video IDs already used elsewhere in THIS video — skipped
+            even if they're the top match again. FIXED: two different (but similarly-worded)
+            scenes could each independently search for something like "safety goggles
+            engineer" and "protective goggles water testing" — different cache keys, same
+            underlying Pexels video, so the old exact-keyword-text dedup never caught it.
+            The same unrelated stock clip of a person in goggles showed up twice in one
+            real generated video for exactly this reason. This checks the actual video ID
+            Pexels assigns, not the search text used to find it.
 
     Returns:
         {
             "clip_path": "/path/to/downloaded.mp4",
             "source": "pexels" | "cache" | "fallback",
             "duration": 15.3,
-            "keyword_used": "silicon wafer semiconductor cleanroom"
+            "keyword_used": "silicon wafer semiconductor cleanroom",
+            "pexels_video_id": 1234567 | None,
         }
     """
     cfg = require(["PEXELS_API_KEY"])
     os.makedirs(CLIP_CACHE_DIR, exist_ok=True)
+    exclude_video_ids = exclude_video_ids or set()
 
-    # Check cache first (hash the keyword to get a stable filename)
+    # Check cache first (hash the keyword to get a stable filename). Cache
+    # hits skip the exclude check by design — if you asked for this EXACT
+    # keyword text twice, you're deliberately reusing it (e.g. no-results
+    # fallback), not accidentally repeating unrelated footage.
     cache_key = hashlib.md5(visual_keyword.encode()).hexdigest()[:12]
     cached_path = os.path.join(CLIP_CACHE_DIR, f"{cache_key}.mp4")
 
     if os.path.exists(cached_path):
         print(f"[visual_fetcher] Scene {scene_number}: Using cached clip for '{visual_keyword}'")
         return {
-            "clip_path":    cached_path,
-            "source":       "cache",
-            "keyword_used": visual_keyword,
+            "clip_path": cached_path, "source": "cache",
+            "keyword_used": visual_keyword, "pexels_video_id": None,
         }
 
     # ── Search Pexels API ─────────────────────────────────────────────────────
@@ -92,35 +105,32 @@ def fetch_clip_for_scene(
         resp.raise_for_status()
         data = resp.json()
     except requests.RequestException as e:
-        print(f"[visual_fetcher] ⚠ Pexels API error: {e}. Using fallback.")
+        print(f"[visual_fetcher] \u26a0 Pexels API error: {e}. Using fallback.")
         return _get_fallback(job_id, scene_number)
 
     videos = data.get("videos", [])
-    if not videos:
-        print(f"[visual_fetcher] ⚠ No results for '{visual_keyword}'. Trying broader query...")
-        # Try a simplified 1-2 word version of the query
+    clip = _select_best_clip(videos, duration_needed, exclude_video_ids)
+
+    if not clip:
+        print(f"[visual_fetcher] \u26a0 No usable results for '{visual_keyword}'. Trying broader query...")
         simple_query = " ".join(visual_keyword.split()[:2])
         params["query"] = simple_query
         try:
             resp = requests.get(PEXELS_VIDEO_API, headers=headers, params=params, timeout=15)
             data = resp.json()
             videos = data.get("videos", [])
+            clip = _select_best_clip(videos, duration_needed, exclude_video_ids)
         except Exception:
             pass
 
-    if not videos:
-        print(f"[visual_fetcher] ⚠ Still no results. Using fallback.")
-        return _get_fallback(job_id, scene_number)
-
-    # ── Select Best Clip ──────────────────────────────────────────────────────
-    # Prefer clips that are >= duration_needed (no looping), or take the longest available
-    clip = _select_best_clip(videos, duration_needed)
     if not clip:
+        print(f"[visual_fetcher] \u26a0 Still no usable results. Using fallback.")
         return _get_fallback(job_id, scene_number)
 
     # ── Download Clip ─────────────────────────────────────────────────────────
     video_url = clip["url"]
-    print(f"[visual_fetcher] ✓ Downloading: {clip['width']}x{clip['height']}px @ {clip['fps']}fps")
+    print(f"[visual_fetcher] \u2713 Downloading: {clip['width']}x{clip['height']}px @ {clip['fps']}fps "
+          f"(pexels id={clip['video_id']})")
 
     try:
         vid_resp = requests.get(video_url, stream=True, timeout=60)
@@ -128,15 +138,14 @@ def fetch_clip_for_scene(
         with open(cached_path, "wb") as f:
             for chunk in vid_resp.iter_content(chunk_size=1024 * 1024):
                 f.write(chunk)
-        print(f"[visual_fetcher] ✓ Saved to cache: {cached_path}")
+        print(f"[visual_fetcher] \u2713 Saved to cache: {cached_path}")
     except Exception as e:
-        print(f"[visual_fetcher] ⚠ Download failed: {e}. Using fallback.")
+        print(f"[visual_fetcher] \u26a0 Download failed: {e}. Using fallback.")
         return _get_fallback(job_id, scene_number)
 
     return {
-        "clip_path":    cached_path,
-        "source":       "pexels",
-        "keyword_used": visual_keyword,
+        "clip_path": cached_path, "source": "pexels",
+        "keyword_used": visual_keyword, "pexels_video_id": clip["video_id"],
     }
 
 
@@ -147,6 +156,7 @@ def fetch_all_scene_clips(scenes_with_times: list, job_id: str) -> list:
     """
     enriched_scenes = []
     used_keywords = set()
+    used_video_ids = set()  # see fetch_clip_for_scene's exclude_video_ids docstring
 
     for scene in scenes_with_times:
         keyword = scene["visual_keyword"]
@@ -165,8 +175,11 @@ def fetch_all_scene_clips(scenes_with_times: list, job_id: str) -> list:
             visual_keyword=keyword,
             duration_needed=duration_needed,
             job_id=job_id,
-            scene_number=scene["scene_number"]
+            scene_number=scene["scene_number"],
+            exclude_video_ids=used_video_ids,
         )
+        if clip_info.get("pexels_video_id"):
+            used_video_ids.add(clip_info["pexels_video_id"])
 
         enriched_scenes.append({**scene, **clip_info})
 
@@ -175,34 +188,36 @@ def fetch_all_scene_clips(scenes_with_times: list, job_id: str) -> list:
 
 # ─── Internal Helpers ──────────────────────────────────────────────────────────
 
-def _select_best_clip(videos: list, duration_needed: float) -> dict | None:
-    """Selects the best video file from Pexels results."""
+def _select_best_clip(videos: list, duration_needed: float, exclude_video_ids: set = None) -> dict | None:
+    """Selects the best video file from Pexels results, skipping any whose
+    parent video ID is already in exclude_video_ids."""
+    exclude_video_ids = exclude_video_ids or set()
     candidates = []
 
     for video in videos:
+        if video.get("id") in exclude_video_ids:
+            continue
         for file in video.get("video_files", []):
             w = file.get("width", 0)
             h = file.get("height", 0)
             if w >= PREFERRED_MIN_WIDTH and h >= PREFERRED_MIN_HEIGHT:
                 candidates.append({
-                    "url":      file["link"],
-                    "width":    w,
-                    "height":   h,
-                    "fps":      file.get("fps", 25),
-                    "duration": video.get("duration", 0),
+                    "url": file["link"], "width": w, "height": h,
+                    "fps": file.get("fps", 25), "duration": video.get("duration", 0),
+                    "video_id": video.get("id"),
                 })
 
     if not candidates:
-        # Loosen requirements — accept any reasonable resolution
+        # Loosen requirements — accept any reasonable resolution (still excluding repeats)
         for video in videos:
+            if video.get("id") in exclude_video_ids:
+                continue
             for file in video.get("video_files", []):
                 if file.get("width", 0) >= 1280:
                     candidates.append({
-                        "url":      file["link"],
-                        "width":    file["width"],
-                        "height":   file.get("height", 720),
-                        "fps":      file.get("fps", 25),
-                        "duration": video.get("duration", 0),
+                        "url": file["link"], "width": file["width"],
+                        "height": file.get("height", 720), "fps": file.get("fps", 25),
+                        "duration": video.get("duration", 0), "video_id": video.get("id"),
                     })
 
     if not candidates:
@@ -223,6 +238,7 @@ def _get_fallback(job_id: str, scene_number: int) -> dict:
         "clip_path":    None,
         "source":       FALLBACK_CLIP_TYPE,
         "keyword_used": "fallback",
+        "pexels_video_id": None,
     }
 
 

@@ -213,7 +213,14 @@ export default function TopicStudio() {
                     <option value="whiteboard_sketch">Whiteboard Sketch</option>
                     <option value="quote_card">Quote Card</option>
                   </select>
-                  <div className="form-hint">Videos generated for this topic always use this style, overriding the default.</div>
+                  <div className="form-hint">
+                    Videos generated for this topic always use this style, overriding the default.
+                    Rule of thumb: <strong>Stock Footage</strong> only for things a camera could
+                    actually film — machines, factories, hardware. For anything abstract or
+                    conceptual (how software works, internal mechanisms, "the internet"), use{' '}
+                    <strong>Whiteboard Sketch</strong> instead — stock sites have no real footage
+                    of abstract ideas, so those searches return mismatched filler.
+                  </div>
                 </div>
               )}
             </div>

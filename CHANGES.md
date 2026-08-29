@@ -50,6 +50,54 @@ with placeholders — on purpose; see "New rule" at the bottom of this file.
   confirm the base layer catches it, and fed deliberately-misaligned transcript
   data into the timestamp function to confirm it no longer produces a gap.
 
+## Fixed after reviewing actual generated output (not just code)
+
+Three real videos were generated and watched frame-by-frame. The feedback was blunt
+and, on inspection, correct. What was actually wrong, and what's now fixed:
+
+- **A ~2 second cut to solid black, mid-sentence.** Found in 3 of 5 real generated
+  videos. Root cause and fix: see "A silent ~2 second cut to solid black" above.
+- **The same irrelevant stock clip repeating in one video** — a person in swimming
+  goggles stood in for "keep these beasts cool" AND "high-stakes water" in the same
+  data-center video. Two different search phrases both loosely matched the same
+  unrelated Pexels video; the old dedup only caught *identical* keyword text.
+  `engine/visual_fetcher.py` now tracks the actual Pexels video ID used across a
+  whole video and refuses to reuse it even from a differently-worded search.
+- **Hard cuts between scenes.** Part of "not in a flow, uneven" — scenes used to
+  cut instantly. `stock_footage` and `quote_card` scenes now crossfade into each
+  other (0.4s dissolve) instead of popping.
+- **B-roll keywords describing abstract concepts instead of filmable things.**
+  Stock sites have zero footage of "a mechanism" or "the internet" — only of real
+  objects and places. The generation prompt (both `script_generator.py` and the
+  `generate-storyboard` Edge Function) now explicitly requires a concrete physical
+  stand-in for abstract ideas, and explicitly forbids "person wearing/modeling
+  equipment" as a subject, which is what produced the goggles clip in the first
+  place. Topic Studio also now shows guidance on which topics suit which style.
+- **Whiteboard-sketch icons didn't connect to each other or to the narration.**
+  This was a real design gap, not a bug — see "Whiteboard mode redesigned" below.
+
+## Whiteboard mode redesigned: one connected diagram, not random icon flashes
+
+The original `whiteboard_sketch` gave every scene a fresh canvas with 1-3
+independently-positioned icons. Watching real output made the problem obvious:
+icons didn't relate to each other or build toward anything — it read as random
+shapes flashing rather than a diagram being drawn, and a generic ~40-icon
+vocabulary often couldn't specifically represent a given sentence anyway.
+
+Redesigned as a genuinely different architecture (`engine/styles/whiteboard_sketch.py`
+now builds one continuous clip for the *entire* video, not one clip per scene — see
+the new `mode: "whole_video"` flag in `engine/styles/__init__.py` and the branch in
+`compose_video()`): one node per scene, laid out in a top-to-bottom zigzag, each new
+node connected to the previous one with a hand-drawn arrow as its scene begins.
+Nothing is erased — earlier nodes stay on screen for the rest of the video, the same
+way a real whiteboard does. Verified by rendering a full test video and inspecting
+frames across its whole length: the diagram visibly grows and connects,
+lightbulb → network → globe → chip → rocket, each linked by an arrow.
+
+This does not close the gap with hand-illustrated content (Branch Education-style) —
+it's still simple line art from a fixed icon set. It does fix the specific,
+legitimate complaint that nothing connected to anything else.
+
 ## Fixed: things that were silently broken
 
 - **The video pipeline couldn't render a single real clip.** `moviepy==1.0.3`'s crop

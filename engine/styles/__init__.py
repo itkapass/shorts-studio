@@ -15,18 +15,21 @@ STYLES = {
     "stock_footage": {
         "label": "Stock Footage",
         "description": "Real b-roll from Pexels with a Ken Burns zoom. The original plan for this project.",
+        "mode": "per_scene",
         "build_background_clip": stock_footage.build_background_clip,
         "uses_icons": False,
     },
     "whiteboard_sketch": {
         "label": "Whiteboard Sketch",
-        "description": "Hand-drawn-style line icons that draw themselves on a paper background — the explainer-video look.",
-        "build_background_clip": whiteboard_sketch.build_background_clip,
+        "description": "One hand-drawn diagram that grows scene by scene, each idea connected to the last — the explainer-video look.",
+        "mode": "whole_video",
+        "build_whole_video_clip": whiteboard_sketch.build_whole_video_clip,
         "uses_icons": True,
     },
     "quote_card": {
         "label": "Quote Card",
         "description": "Minimal drifting gradient, no footage or icons — just big bold captions carrying the whole video.",
+        "mode": "per_scene",
         "build_background_clip": quote_card.build_background_clip,
         "uses_icons": False,
     },

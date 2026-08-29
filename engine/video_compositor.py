@@ -59,6 +59,7 @@ AUDIO_CODEC = "aac"
 VIDEO_BITRATE = "4000k"
 
 CAPTION_CENTER_Y = int(VIDEO_HEIGHT * 0.62)  # Default caption position (62% down)
+CROSSFADE_DURATION = 0.4  # seconds — dissolve between scenes instead of a hard cut
 
 
 # ─── Core Function ─────────────────────────────────────────────────────────────
@@ -98,51 +99,74 @@ def compose_video(
     print(f"[video_compositor] Starting composition: {total_duration:.1f}s video, "
           f"{len(scenes_with_clips)} scenes, style='{render_style}'")
 
-    # ── Step 1: Full-duration base layer (defense-in-depth, cheap on purpose) ─
-    # get_scene_timestamps() now forces scenes to be perfectly contiguous
-    # (see engine/voice_engine.py), which is the real fix for the black-hole
-    # bug this guards against. This stays as a second line of defense: if
-    # any future change reintroduces a gap in per-scene coverage, the worst
-    # case becomes "a plain color shows for a moment" instead of "solid
-    # black mid-sentence" — CompositeVideoClip's canvas for any time
-    # position nothing covers is solid black, full stop. Deliberately a
-    # flat static color, not the full style renderer run a second time —
-    # this sits fully hidden under real content for the entire video in the
-    # normal case, so it isn't worth paying render cost for anything fancier.
-    base_color = _FALLBACK_COLOR.get(render_style, (15, 15, 20))
-    background_clips = [ColorClip(size=(VIDEO_WIDTH, VIDEO_HEIGHT), color=base_color).set_duration(total_duration)]
+    # ── Step 1 & 2: Build the background(s) — branches on style mode ──────────
+    # Two genuinely different needs here: stock_footage/quote_card each
+    # scene is independent, so they're built one at a time and crossfaded
+    # together. whiteboard_sketch's connected diagram needs to see every
+    # scene at once (to lay out and progressively reveal one continuous
+    # drawing) — see engine/styles/whiteboard_sketch.py — so it gets built
+    # as a single whole-video clip instead of a per-scene loop.
+    if style.get("mode") == "whole_video":
+        background_clips = [
+            style["build_whole_video_clip"](scenes_with_clips, total_duration, VIDEO_WIDTH, VIDEO_HEIGHT)
+        ]
+    else:
+        # Defense-in-depth base layer: get_scene_timestamps() forces scenes
+        # to be perfectly contiguous (see engine/voice_engine.py), which is
+        # the real fix for a black-hole bug found in real generated output
+        # (a ~2s gap between scenes exposed CompositeVideoClip's default
+        # black canvas, with the caption still playing right through it).
+        # This is the second line of defense: if any future change
+        # reintroduces a coverage gap, the worst case is a plain color for
+        # a moment instead of a black hole. Deliberately a flat static
+        # color, not the full style renderer again — this sits fully
+        # hidden under real content in the normal case.
+        base_color = _FALLBACK_COLOR.get(render_style, (15, 15, 20))
+        background_clips = [ColorClip(size=(VIDEO_WIDTH, VIDEO_HEIGHT), color=base_color).set_duration(total_duration)]
 
-    # ── Step 2: Build per-scene background clips (style-specific) ─────────────
-    for scene in scenes_with_clips:
-        scene_start = scene.get("time_start", 0)
-        scene_end   = scene.get("time_end", total_duration)
-        scene_dur   = max(scene_end - scene_start, 0.5)
+        # FIXED: scenes used to cut instantly from one background to the
+        # next — part of what read as "uneven, not in a flow." Adjacent
+        # scenes now overlap by CROSSFADE_DURATION and the incoming one
+        # fades in over that overlap, so cuts dissolve instead of popping.
+        n_scenes = len(scenes_with_clips)
+        pad = CROSSFADE_DURATION / 2
 
-        bg_clip = style["build_background_clip"](scene, scene_dur, VIDEO_WIDTH, VIDEO_HEIGHT)
-        bg_clip = bg_clip.set_start(scene_start)
-        background_clips.append(bg_clip)
+        for i, scene in enumerate(scenes_with_clips):
+            scene_start = scene.get("time_start", 0)
+            scene_end   = scene.get("time_end", total_duration)
 
-    # ── Step 2: Build caption overlay (style-agnostic) ────────────────────────
+            lead_pad  = pad if i > 0 else 0.0
+            trail_pad = pad if i < n_scenes - 1 else 0.0
+            effective_start = max(scene_start - lead_pad, 0.0)
+            effective_dur = max((scene_end + trail_pad) - effective_start, 0.5)
+
+            bg_clip = style["build_background_clip"](scene, effective_dur, VIDEO_WIDTH, VIDEO_HEIGHT)
+            bg_clip = bg_clip.set_start(effective_start)
+            if i > 0:
+                bg_clip = bg_clip.crossfadein(CROSSFADE_DURATION)
+            background_clips.append(bg_clip)
+
+    # ── Step 3: Build caption overlay (style-agnostic) ────────────────────────
     caption_clips = _build_caption_clips(caption_cards, caption_style, total_duration)
 
-    # ── Step 3: Branding / Watermark (style-agnostic) ─────────────────────────
+    # ── Step 4: Branding / Watermark (style-agnostic) ─────────────────────────
     branding_clips = []
     if branding:
         branding_clips = _build_branding(branding, total_duration)
 
-    # ── Step 4: Composite everything ──────────────────────────────────────────
+    # ── Step 5: Composite everything ──────────────────────────────────────────
     all_clips = background_clips + caption_clips + branding_clips
     final_video = CompositeVideoClip(all_clips, size=(VIDEO_WIDTH, VIDEO_HEIGHT))
     final_video = final_video.set_duration(total_duration)
 
-    # ── Step 5: Attach audio ───────────────────────────────────────────────────
+    # ── Step 6: Attach audio ───────────────────────────────────────────────────
     if os.path.exists(mixed_audio_path):
         audio = AudioFileClip(mixed_audio_path).set_duration(total_duration)
         final_video = final_video.set_audio(audio)
     else:
         print(f"[video_compositor] \u26a0 Audio file not found: {mixed_audio_path}")
 
-    # ── Step 6: Render to file ─────────────────────────────────────────────────
+    # ── Step 7: Render to file ─────────────────────────────────────────────────
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     print(f"[video_compositor] Rendering {VIDEO_WIDTH}x{VIDEO_HEIGHT}@{FPS}fps → {output_path}")
 

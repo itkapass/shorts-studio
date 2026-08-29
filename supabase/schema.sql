@@ -107,7 +107,7 @@ INSERT INTO topics (name, description, custom_context, category, render_style) V
     (
         'How Data Centers Work',
         'The physical infrastructure behind the internet — massive warehouses of servers that power every website, app, and cloud service.',
-        'Include facts about power consumption, cooling systems, and the global scale of the internet.',
+        'Focus on facts about power consumption, cooling systems, and the global scale of the internet. Keep b-roll grounded in real machinery and buildings (server racks, cooling towers, cables, generators) — never people modeling equipment.',
         'tech', NULL
     ),
     (
