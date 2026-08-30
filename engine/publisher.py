@@ -74,7 +74,7 @@ CATEGORY_MAP = {
 
 # ─── Authentication ────────────────────────────────────────────────────────────
 
-def get_authenticated_service():
+def get_authenticated_service(creds_override: dict = None):
     """Returns an authenticated YouTube API service object.
 
     Tries, in order:
@@ -83,7 +83,7 @@ def get_authenticated_service():
       2. The local engine/youtube_token.pickle cache, if present.
       3. The interactive browser flow (only works with a real local browser).
     """
-    credentials = _credentials_from_env() or _credentials_from_pickle()
+    credentials = _credentials_from_env(creds_override) or _credentials_from_pickle()
 
     if credentials and credentials.expired and credentials.refresh_token:
         print("[publisher] Refreshing expired OAuth access token...")
@@ -97,10 +97,23 @@ def get_authenticated_service():
     return googleapiclient.discovery.build(API_SERVICE, API_VERSION, credentials=credentials)
 
 
-def _credentials_from_env():
-    client_id = get("YOUTUBE_CLIENT_ID")
-    client_secret = get("YOUTUBE_CLIENT_SECRET")
-    refresh_token = get("YOUTUBE_REFRESH_TOKEN")
+def _credentials_from_env(creds_override: dict = None):
+    """Loads OAuth credentials.
+
+    `creds_override` lets a specific channel supply its own client id, secret
+    and refresh token (see engine/channels.py). Each channel gets its own
+    Google Cloud project so each gets its own 10,000-unit daily API budget —
+    quota is per project, not per channel, so sharing one project across five
+    channels would cap all five at 6 uploads a day between them.
+    """
+    if creds_override:
+        client_id = creds_override.get("client_id")
+        client_secret = creds_override.get("client_secret")
+        refresh_token = creds_override.get("refresh_token")
+    else:
+        client_id = get("YOUTUBE_CLIENT_ID")
+        client_secret = get("YOUTUBE_CLIENT_SECRET")
+        refresh_token = get("YOUTUBE_REFRESH_TOKEN")
     if not (client_id and client_secret and refresh_token):
         return None
 
@@ -118,10 +131,14 @@ def _credentials_from_env():
         msg = str(e).lower()
         if "invalid_grant" in msg:
             raise RuntimeError(
-                "YOUTUBE_REFRESH_TOKEN was rejected (invalid_grant). If your Google OAuth "
-                "consent screen is still in 'Testing' status, refresh tokens expire after 7 "
-                "days — re-run `python engine/publisher.py --setup` and update the secret. "
-                "See docs/04_AUTONOMOUS_YOUTUBE_PUBLISHING.md."
+                "The YouTube refresh token was rejected (invalid_grant).\n\n"
+                "The usual cause: your Google OAuth consent screen is still in 'Testing' "
+                "status, and Google expires refresh tokens after 7 days in that state.\n\n"
+                "PERMANENT FIX (do this once, takes 2 minutes): set the consent screen to "
+                "'In production'. Tokens then stop expiring on the 7-day clock. Step-by-step "
+                "in docs/07_YOUTUBE_AND_CHANNELS.md section 3.\n\n"
+                "TEMPORARY FIX: re-run `python engine/publisher.py --setup` and update the "
+                "secret — but you will be back here in 7 days."
             ) from e
         raise
     return creds
@@ -178,6 +195,7 @@ def upload_video(
     category: str = "default",
     privacy: str = "public",
     notify_subscribers: bool = False,
+    creds_override: dict = None,
 ) -> dict:
     """
     Uploads a video to YouTube as a Short.
@@ -190,6 +208,8 @@ def upload_video(
         category:             Content category key from CATEGORY_MAP
         privacy:              "public" | "private" | "unlisted"
         notify_subscribers:   Whether to notify subscribers (default False for batch uploads)
+        creds_override:       Per-channel OAuth credentials from engine/channels.py.
+                              None uses the default YOUTUBE_* environment variables.
 
     Returns:
         {"video_id": "...", "url": "https://youtube.com/shorts/...", "status": "uploaded"}
@@ -232,7 +252,7 @@ def upload_video(
     print(f"[publisher] Uploading: '{title}'")
     print(f"[publisher] File: {video_path} ({os.path.getsize(video_path) / 1024 / 1024:.1f} MB)")
 
-    youtube = get_authenticated_service()
+    youtube = get_authenticated_service(creds_override)
 
     media = MediaFileUpload(
         video_path,

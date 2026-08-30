@@ -23,6 +23,10 @@ from supabase import create_client
 
 from engine.config import require, get
 from engine.publisher import upload_video
+from engine import channels as channels_mod
+from engine import concept_memory
+from engine import storage_r2
+from engine import alerts
 
 
 def _load_publish_per_run(db) -> int:
@@ -46,6 +50,15 @@ def run_publish_pipeline():
 
     publish_per_run = _load_publish_per_run(db)
 
+    # Multi-channel routing. Each channel carries its own credentials and its
+    # own daily cap, because YouTube's 10,000-unit budget is per Google Cloud
+    # project — see engine/channels.py.
+    all_channels = channels_mod.load_channels(db=db)
+    if all_channels:
+        print(f"[publish] {len(all_channels)} channel(s) configured:")
+        for ch in all_channels:
+            print(f"[publish]   - {channels_mod.describe(ch)}")
+
     rows = (
         db.table("videos")
         .select("*")
@@ -61,6 +74,7 @@ def run_publish_pipeline():
         return
 
     print(f"[publish] Found {len(rows)} approved video(s). Publishing...")
+    published_count = 0
 
     for row in rows:
         job_id = row["job_id"]
@@ -68,6 +82,47 @@ def run_publish_pipeline():
         tmp_path = None
 
         try:
+            # ── Pick the destination channel ─────────────────────────────
+            channel = None
+            creds = None
+            if all_channels:
+                channel = channels_mod.route(row.get("category") or row.get("archetype") or "",
+                                             channels=all_channels)
+                if not channel:
+                    print(f"[publish] \u26a0 No channel accepts category "
+                          f"'{row.get('category')}'. Leaving for manual export.")
+                    _update_status(db, row["id"], "needs_manual",
+                                   error="No channel configured for this category")
+                    continue
+
+                if channel.get("publish_mode") != "auto":
+                    print(f"[publish] Channel '{channel.get('name')}' is set to manual. "
+                          f"Marking for export instead of publishing.")
+                    _update_status(db, row["id"], "needs_manual",
+                                   error="Channel is set to manual posting")
+                    continue
+
+                cap = channels_mod.daily_cap_for(channel)
+                sent = channels_mod.published_today(channel.get("id"), db=db)
+                if sent >= cap:
+                    # Stop BEFORE the API call. Pushing past the cap returns a
+                    # 403 that also burns quota, so the next run starts even
+                    # further behind.
+                    print(f"[publish] Channel '{channel.get('name')}' hit its daily cap "
+                          f"({sent}/{cap}). Skipping.")
+                    alerts.daily_quota_reached(sent, cap)
+                    continue
+
+                creds = channels_mod.credentials_for(channel)
+                if not creds:
+                    alerts.youtube_auth_broken(
+                        channel.get("name", "?"),
+                        "The channel's YOUTUBE_* secrets are missing or incomplete.",
+                    )
+                    _update_status(db, row["id"], "publish_failed",
+                                   error="Channel credentials missing")
+                    continue
+
             video_url = row.get("storage_url")
             if not video_url:
                 print(f"[publish] \u26a0 No storage URL for job {job_id}. Skipping.")
@@ -94,21 +149,44 @@ def run_publish_pipeline():
                 category="tech",
                 privacy="public",
                 notify_subscribers=False,
+                creds_override=creds,
             )
 
             db.table("videos").update({
                 "status":       "published",
                 "youtube_id":   result["video_id"],
                 "youtube_url":  result["url"],
+                "channel_id":   (channel or {}).get("id"),
                 "published_at": datetime.now(timezone.utc).isoformat(),
             }).eq("id", row["id"]).execute()
 
+            # Commit the concept to the permanent ledger only now, on the way
+            # out. Recording it at generation time would burn the idea even
+            # when the video was rejected, slowly starving the topic pool.
+            try:
+                storyboard = row.get("storyboard")
+                if isinstance(storyboard, str):
+                    storyboard = json.loads(storyboard)
+                if storyboard:
+                    concept_memory.record_concept(storyboard, job_id, db=db)
+            except Exception as e:
+                print(f"[publish] \u26a0 Could not record concept: {e}")
+
+            # The file has done its job. Deleting immediately is what keeps a
+            # free storage tier permanently sufficient.
+            storage_r2.delete_video(job_id, db=db)
+
+            published_count += 1
             print(f"[publish] \u2713 Published: {result['url']}")
 
         except Exception as e:
             error_msg = _explain_error(e)
             print(f"[publish] \u2717 Failed to publish job {job_id}: {error_msg}")
             _update_status(db, row["id"], "publish_failed", error=error_msg)
+            # An auth failure stops EVERY future upload, not just this one, so
+            # it is the one error worth interrupting someone about.
+            if "invalid_grant" in str(e).lower() or "refresh token" in error_msg.lower():
+                alerts.youtube_auth_broken((channel or {}).get("name", "default"), error_msg)
 
         finally:
             if tmp_path and os.path.exists(tmp_path):

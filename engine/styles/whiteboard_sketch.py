@@ -36,9 +36,20 @@ LINE_COLOR = (90, 90, 100)   # connecting lines — slightly lighter than icon i
 
 # Layout: nodes flow top-to-bottom in this vertical band, zigzagging left/right.
 # Bounded well above the caption safe zone (captions sit around y=0.62).
-Y_TOP, Y_BOTTOM = 0.10, 0.54
-X_LEFT, X_RIGHT = 0.30, 0.70
-NODE_BOX_RATIO = 0.15  # icon box size, as a fraction of min(video_w, video_h)
+# LAYOUT — widened after reviewing real output. The previous bounds
+# (Y 0.10-0.54, X 0.30-0.70, box 0.15) packed the whole diagram into a narrow
+# column in the upper half, leaving an obvious dead band between the last icon
+# and the captions at 0.62. On a phone that reads as an unfinished video.
+# The diagram now uses the full width available and the full height above the
+# caption line, and the icons are substantially larger.
+Y_TOP, Y_BOTTOM = 0.09, 0.56
+X_LEFT, X_RIGHT = 0.19, 0.81
+NODE_BOX_RATIO = 0.21  # icon box size, as a fraction of min(video_w, video_h)
+
+# With few nodes there is spare room, so the icons grow to fill it. Without
+# this, a 3-scene video draws three small icons marooned in a large empty
+# frame while a 6-scene video looks correctly full.
+SPARSE_NODE_SCALE = {1: 1.55, 2: 1.40, 3: 1.28, 4: 1.14}
 
 
 def _paper_texture(w, h, seed=0):
@@ -137,7 +148,14 @@ def _draw_connector(draw, p_from, p_to, progress, seed, node_size):
 
 
 def _node_positions(n_nodes, video_w, video_h):
-    """Top-to-bottom zigzag layout — one position per scene/node."""
+    """Top-to-bottom zigzag layout — one position per scene/node.
+
+    A single node is centred rather than pushed to the left edge, which is
+    what the old modulo rule did and it looked like a mistake.
+    """
+    if n_nodes == 1:
+        return [(video_w * 0.5, video_h * (Y_TOP + Y_BOTTOM) / 2)]
+
     positions = []
     for i in range(n_nodes):
         frac = i / max(n_nodes - 1, 1)
@@ -145,6 +163,11 @@ def _node_positions(n_nodes, video_w, video_h):
         x = video_w * (X_LEFT if i % 2 == 0 else X_RIGHT)
         positions.append((x, y))
     return positions
+
+
+def _node_size(n_nodes, video_w, video_h):
+    base = min(video_w, video_h) * NODE_BOX_RATIO
+    return base * SPARSE_NODE_SCALE.get(n_nodes, 1.0)
 
 
 def build_whole_video_clip(scenes: list, total_duration: float, video_w: int, video_h: int):
@@ -158,7 +181,7 @@ def build_whole_video_clip(scenes: list, total_duration: float, video_w: int, vi
     n = len(scenes)
     icons = [(s.get("icons") or ["lightbulb"])[0] for s in scenes]
     positions = _node_positions(n, video_w, video_h)
-    node_size = min(video_w, video_h) * NODE_BOX_RATIO
+    node_size = _node_size(n, video_w, video_h)
 
     seed_source = "|".join(icons) + str(n)
     base_seed = abs(hash(seed_source)) % 100000

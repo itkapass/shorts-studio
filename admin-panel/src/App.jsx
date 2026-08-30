@@ -1,24 +1,49 @@
 // src/App.jsx
 import { BrowserRouter, Routes, Route, Navigate, NavLink, Link } from 'react-router-dom'
-import { LayoutDashboard, Film, Palette, Settings, Sparkles, Flame, AlertCircle, LogOut } from 'lucide-react'
+import { LayoutDashboard, Film, Palette, Settings, Sparkles, Flame, AlertCircle, LogOut, Tv, BookOpen } from 'lucide-react'
 import Dashboard from './pages/Dashboard'
 import VideoQueue from './pages/VideoQueue'
 import CreateVideo from './pages/CreateVideo'
 import TrendingRadar from './pages/TrendingRadar'
 import TopicStudio from './pages/TopicStudio'
 import SettingsPage from './pages/SettingsPage'
+import ChannelsPage from './pages/ChannelsPage'
+import ConceptLedger from './pages/ConceptLedger'
 import Login from './pages/Login'
 import { isSupabaseConfigured } from './lib/supabase'
 import { AuthProvider, useAuth } from './lib/auth'
 import './index.css'
 
-const NAV_ITEMS = [
-  { to: '/',         label: 'Dashboard',       icon: LayoutDashboard },
-  { to: '/create',   label: 'Create Video',    icon: Sparkles, badge: 'AI' },
-  { to: '/trending', label: 'Trending Radar',  icon: Flame, badge: 'HOT' },
-  { to: '/queue',    label: 'Video Queue',     icon: Film },
-  { to: '/studio',   label: 'Topic Studio',    icon: Palette },
-  { to: '/settings', label: 'Settings',        icon: Settings },
+// Grouped so the sidebar reads in pipeline order: make it, review it,
+// configure it. The old flat list mixed those together, which is confusing
+// the first time you open the app and have no idea which page does what.
+const NAV_GROUPS = [
+  {
+    title: 'Overview',
+    items: [{ to: '/', label: 'Dashboard', icon: LayoutDashboard }],
+  },
+  {
+    title: 'Make',
+    items: [
+      { to: '/create',   label: 'Create Video',   icon: Sparkles, badge: 'AI' },
+      { to: '/trending', label: 'Trending Radar', icon: Flame, badge: 'HOT' },
+      { to: '/concepts', label: 'Concept Ledger', icon: BookOpen },
+    ],
+  },
+  {
+    title: 'Review & publish',
+    items: [
+      { to: '/queue',    label: 'Video Queue', icon: Film },
+      { to: '/channels', label: 'Channels',    icon: Tv },
+    ],
+  },
+  {
+    title: 'Configure',
+    items: [
+      { to: '/studio',   label: 'Topic Studio', icon: Palette },
+      { to: '/settings', label: 'Settings',     icon: Settings },
+    ],
+  },
 ]
 
 function Sidebar() {
@@ -32,21 +57,26 @@ function Sidebar() {
         </span>
       </div>
       <nav>
-        {NAV_ITEMS.map(({ to, label, icon: Icon, badge }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={to === '/'}
-            className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
-          >
-            <Icon size={17} />
-            <span style={{ flex: 1 }}>{label}</span>
-            {badge && (
-              <span className={`nav-badge nav-badge-${badge.toLowerCase()}`}>
-                {badge}
-              </span>
-            )}
-          </NavLink>
+        {NAV_GROUPS.map(({ title, items }) => (
+          <div key={title} className="nav-group">
+            <span className="nav-group-title">{title}</span>
+            {items.map(({ to, label, icon: Icon, badge }) => (
+              <NavLink
+                key={to}
+                to={to}
+                end={to === '/'}
+                className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
+              >
+                <Icon size={17} />
+                <span style={{ flex: 1 }}>{label}</span>
+                {badge && (
+                  <span className={`nav-badge nav-badge-${badge.toLowerCase()}`}>
+                    {badge}
+                  </span>
+                )}
+              </NavLink>
+            ))}
+          </div>
         ))}
       </nav>
       {user && (
@@ -103,6 +133,8 @@ function AppShell() {
           <Route path="/queue"    element={<RequireAuth><VideoQueue /></RequireAuth>} />
           <Route path="/studio"   element={<RequireAuth><TopicStudio /></RequireAuth>} />
           <Route path="/settings" element={<RequireAuth><SettingsPage /></RequireAuth>} />
+          <Route path="/channels" element={<RequireAuth><ChannelsPage /></RequireAuth>} />
+          <Route path="/concepts" element={<RequireAuth><ConceptLedger /></RequireAuth>} />
         </Routes>
       </main>
     </div>

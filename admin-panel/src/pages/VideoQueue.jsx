@@ -8,6 +8,31 @@ import {
   ChevronDown, ChevronUp, Play, Pause, Trash2, Sparkles, Filter
 } from 'lucide-react'
 
+// Triggers the manual-export workflow for a video: the file, captions,
+// hashtags and a posting checklist get packaged into a downloadable zip, and
+// the video leaves the auto-publish pipeline. Used when a video belongs on a
+// different channel, on another platform, or should go out at a moment you
+// choose.
+async function requestManualExport(video, setBusy, setMsg) {
+  setBusy(video.id)
+  setMsg('')
+  try {
+    const { error } = await supabase
+      .from('videos')
+      .update({ status: 'needs_manual' })
+      .eq('id', video.id)
+    if (error) throw error
+    setMsg(
+      'Marked for manual posting. The next publish run packages it with captions, ' +
+      'hashtags and a step-by-step checklist, then frees its storage.'
+    )
+  } catch (e) {
+    setMsg('Could not mark for export: ' + e.message)
+  } finally {
+    setBusy(null)
+  }
+}
+
 export default function VideoQueue() {
   const [videos, setVideos] = useState([])
   const [filter, setFilter] = useState('pending') // 'pending' | 'approved' | 'published' | 'all'

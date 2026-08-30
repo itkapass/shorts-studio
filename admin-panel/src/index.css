@@ -662,3 +662,80 @@ tr:hover td { background: var(--bg-elevated); }
   box-shadow: var(--shadow-card);
 }
 
+
+/* ── Navigation groups ─────────────────────────────────────────────────────
+   The sidebar is grouped in pipeline order (make -> review -> configure)
+   rather than being one flat list, so someone opening the app for the first
+   time can tell which page does what without clicking every one. */
+.nav-group { margin-bottom: 1.1rem; }
+.nav-group-title {
+  display: block; padding: 0 0.85rem 0.3rem; font-size: 0.68rem;
+  font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase;
+  color: var(--text-dim, #7c8394);
+}
+
+/* ── Shared page furniture ─────────────────────────────────────────────── */
+.page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: 1.5rem; }
+.page-head h1 { margin: 0 0 0.25rem; }
+.muted { color: var(--text-dim, #7c8394); }
+.small { font-size: 0.82rem; }
+.hint { font-size: 0.8rem; color: var(--text-dim, #7c8394); margin: -0.35rem 0 0.9rem; line-height: 1.5; }
+.hint code { background: rgba(255,255,255,0.07); padding: 0.1rem 0.32rem; border-radius: 4px; font-size: 0.76rem; }
+
+.alert { display: flex; gap: 0.7rem; padding: 0.85rem 1rem; border-radius: 10px; margin-bottom: 1.2rem; font-size: 0.88rem; line-height: 1.55; }
+.alert p { margin: 0.35rem 0 0; }
+.alert.error { background: rgba(220,70,70,0.13); border: 1px solid rgba(220,70,70,0.35); }
+.alert.warn  { background: rgba(230,170,60,0.13); border: 1px solid rgba(230,170,60,0.35); }
+.alert.info  { background: rgba(80,150,230,0.13); border: 1px solid rgba(80,150,230,0.35); }
+
+.card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 1rem; }
+.card { background: var(--bg-elev, #171a21); border: 1px solid var(--border, #262b36); border-radius: 12px; padding: 1.1rem; }
+.card.dim { opacity: 0.55; }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; }
+.card-head h3 { margin: 0; font-size: 1rem; }
+.card-actions { display: flex; gap: 0.5rem; margin-top: 0.9rem; }
+
+.pill { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.16rem 0.55rem; border-radius: 999px; font-size: 0.7rem; font-weight: 700; }
+.pill-green { background: rgba(60,190,120,0.16); color: #4ecf90; }
+.pill-amber { background: rgba(230,170,60,0.16); color: #e5b04a; }
+
+.chip-grid { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.5rem 0 0.2rem; }
+.chip-row  { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.55rem 0; }
+.chip { padding: 0.3rem 0.65rem; border-radius: 999px; font-size: 0.78rem; cursor: pointer;
+        background: rgba(255,255,255,0.05); border: 1px solid var(--border, #262b36); color: inherit; }
+.chip.on { background: rgba(110,140,255,0.18); border-color: rgba(110,140,255,0.5); }
+.chip.sm { font-size: 0.72rem; padding: 0.2rem 0.5rem; cursor: default; }
+.chip.xs { font-size: 0.66rem; padding: 0.12rem 0.4rem; cursor: default; opacity: 0.75; }
+
+.modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.62); display: flex;
+                  align-items: center; justify-content: center; padding: 1.5rem; z-index: 50; }
+.modal { background: var(--bg-elev, #171a21); border: 1px solid var(--border, #262b36);
+         border-radius: 14px; padding: 1.5rem; width: min(560px, 100%); max-height: 88vh; overflow-y: auto; }
+.modal h2 { margin: 0 0 1rem; }
+.modal label { display: block; margin-bottom: 0.9rem; font-size: 0.85rem; font-weight: 600; }
+.modal label.row { display: flex; align-items: center; gap: 0.55rem; font-weight: 500; }
+.modal input[type="text"], .modal input:not([type]), .modal input[type="number"],
+.modal select, .modal textarea {
+  width: 100%; margin-top: 0.35rem; padding: 0.55rem 0.7rem; border-radius: 8px;
+  background: var(--bg, #0f1115); border: 1px solid var(--border, #262b36);
+  color: inherit; font: inherit;
+}
+.modal label.row input[type="checkbox"] { width: auto; margin: 0; }
+.modal fieldset { border: 1px solid var(--border, #262b36); border-radius: 10px; padding: 0.8rem; margin-bottom: 1rem; }
+.modal legend { padding: 0 0.4rem; font-size: 0.8rem; font-weight: 600; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 1.2rem; }
+
+.toolbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
+.search { display: flex; align-items: center; gap: 0.5rem; padding: 0.45rem 0.75rem;
+          background: var(--bg-elev, #171a21); border: 1px solid var(--border, #262b36); border-radius: 9px; flex: 1; max-width: 420px; }
+.search input { background: none; border: none; color: inherit; font: inherit; outline: none; width: 100%; }
+
+.ledger { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.6rem; }
+.ledger li { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem;
+             background: var(--bg-elev, #171a21); border: 1px solid var(--border, #262b36);
+             border-radius: 10px; padding: 0.85rem 1rem; }
+.ledger li p { margin: 0.3rem 0 0; }
+
+.empty { text-align: center; padding: 3rem 1rem; color: var(--text-dim, #7c8394); }
+.btn.sm { padding: 0.32rem 0.65rem; font-size: 0.8rem; }
+.btn.danger { color: #e46b6b; border-color: rgba(220,70,70,0.4); }

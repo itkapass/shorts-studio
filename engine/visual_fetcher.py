@@ -44,6 +44,7 @@ def fetch_clip_for_scene(
     job_id: str = "job",
     scene_number: int = 1,
     exclude_video_ids: set = None,
+    scene_text: str = "",
 ) -> dict:
     """
     Fetches the best matching video clip for a scene's visual keyword.
@@ -109,7 +110,7 @@ def fetch_clip_for_scene(
         return _get_fallback(job_id, scene_number)
 
     videos = data.get("videos", [])
-    clip = _select_best_clip(videos, duration_needed, exclude_video_ids)
+    clip = _select_best_clip(videos, duration_needed, exclude_video_ids, scene_text, visual_keyword)
 
     if not clip:
         print(f"[visual_fetcher] \u26a0 No usable results for '{visual_keyword}'. Trying broader query...")
@@ -119,7 +120,7 @@ def fetch_clip_for_scene(
             resp = requests.get(PEXELS_VIDEO_API, headers=headers, params=params, timeout=15)
             data = resp.json()
             videos = data.get("videos", [])
-            clip = _select_best_clip(videos, duration_needed, exclude_video_ids)
+            clip = _select_best_clip(videos, duration_needed, exclude_video_ids, scene_text, visual_keyword)
         except Exception:
             pass
 
@@ -177,6 +178,7 @@ def fetch_all_scene_clips(scenes_with_times: list, job_id: str) -> list:
             job_id=job_id,
             scene_number=scene["scene_number"],
             exclude_video_ids=used_video_ids,
+            scene_text=scene.get("voice_text", ""),
         )
         if clip_info.get("pexels_video_id"):
             used_video_ids.add(clip_info["pexels_video_id"])
@@ -188,7 +190,43 @@ def fetch_all_scene_clips(scenes_with_times: list, job_id: str) -> list:
 
 # ─── Internal Helpers ──────────────────────────────────────────────────────────
 
-def _select_best_clip(videos: list, duration_needed: float, exclude_video_ids: set = None) -> dict | None:
+def rank_candidates_with_ai(scene_text: str, keyword: str, candidates: list) -> list:
+    """Re-orders Pexels candidates by how well they actually match the scene.
+
+    WHY THIS EXISTS: reviewing real generated output turned up a person in
+    swimming goggles standing in for "keep these beasts cool", and a Spanish
+    emergency-stop button standing in for a line about supercomputers. Pexels
+    returns whatever its text search matches, and the old code then picked at
+    RANDOM from the results that were big enough. Random selection from a
+    loosely-matched set is how you get a video about data centres showing a
+    derelict warehouse.
+
+    Pexels returns rich metadata per video (the uploader's own description,
+    tags, dimensions). Handing that metadata plus the narration line to the
+    model that wrote the script and asking which clip actually fits is one
+    cheap text call — no image analysis, no extra API, well inside the free
+    tier — and it is the difference between b-roll that illustrates the line
+    and b-roll that merely shares a keyword with it.
+
+    Fails open: any error and the original order is returned unchanged, so a
+    model outage costs relevance, not the render.
+    """
+    if len(candidates) < 2:
+        return candidates
+    try:
+        from engine.script_generator import rank_visual_candidates
+        order = rank_visual_candidates(scene_text, keyword, candidates)
+        if order:
+            ranked = [candidates[i] for i in order if 0 <= i < len(candidates)]
+            missing = [c for i, c in enumerate(candidates) if i not in order]
+            return ranked + missing
+    except Exception as e:
+        print(f"[visual_fetcher] \u26a0 AI ranking unavailable ({e}); using search order.")
+    return candidates
+
+
+def _select_best_clip(videos: list, duration_needed: float, exclude_video_ids: set = None,
+                      scene_text: str = "", keyword_used: str = "") -> dict | None:
     """Selects the best video file from Pexels results, skipping any whose
     parent video ID is already in exclude_video_ids."""
     exclude_video_ids = exclude_video_ids or set()
@@ -197,6 +235,10 @@ def _select_best_clip(videos: list, duration_needed: float, exclude_video_ids: s
     for video in videos:
         if video.get("id") in exclude_video_ids:
             continue
+        # The uploader's own words about the clip. This is the only signal
+        # available for judging relevance without downloading and analysing
+        # the footage, so it is carried through to the AI ranking step.
+        blurb = (video.get("alt") or video.get("url", "").rstrip("/").split("/")[-1].replace("-", " "))
         for file in video.get("video_files", []):
             w = file.get("width", 0)
             h = file.get("height", 0)
@@ -204,7 +246,7 @@ def _select_best_clip(videos: list, duration_needed: float, exclude_video_ids: s
                 candidates.append({
                     "url": file["link"], "width": w, "height": h,
                     "fps": file.get("fps", 25), "duration": video.get("duration", 0),
-                    "video_id": video.get("id"),
+                    "video_id": video.get("id"), "description": blurb,
                 })
 
     if not candidates:
@@ -223,13 +265,26 @@ def _select_best_clip(videos: list, duration_needed: float, exclude_video_ids: s
     if not candidates:
         return None
 
-    # Prefer clips >= duration_needed (don't need looping)
-    long_enough = [c for c in candidates if c["duration"] >= duration_needed]
-    if long_enough:
-        return random.choice(long_enough)
+    # Deduplicate to one file per source video before ranking — otherwise the
+    # same clip appears five times (once per resolution) and crowds out the
+    # alternatives the ranker is supposed to be choosing between.
+    by_video, order = {}, []
+    for c in candidates:
+        vid = c["video_id"]
+        if vid not in by_video:
+            by_video[vid] = c
+            order.append(vid)
+        elif c["width"] > by_video[vid]["width"]:
+            by_video[vid] = c
+    unique = [by_video[v] for v in order]
 
-    # Take the longest available otherwise
-    return max(candidates, key=lambda c: c["duration"])
+    long_enough = [c for c in unique if c["duration"] >= duration_needed]
+    pool = long_enough or unique
+
+    if scene_text:
+        pool = rank_candidates_with_ai(scene_text, keyword_used or "", pool[:6])
+
+    return pool[0] if pool else None
 
 
 def _get_fallback(job_id: str, scene_number: int) -> dict:

@@ -220,7 +220,20 @@ def _build_caption_clips(
     style: CaptionStyle,
     total_duration: float
 ) -> list:
-    """Builds MoviePy text clips for each caption card."""
+    """Builds MoviePy text clips for each caption card.
+
+    FIXED — THE HIGHLIGHT THAT NEVER RENDERED. CaptionStyle has always defined
+    `highlight_color` and nothing ever read it, so every caption came out flat
+    white. Cards now carry per-word timings, so each card is split into one
+    sub-clip per word, and the sub-clip covering a word's speaking window
+    renders that word in the highlight colour.
+
+    Splitting per word rather than animating one clip is deliberate: MoviePy
+    1.0.3 has no per-frame text redraw that is not brutally slow, and a card
+    only has 2-4 words, so this is a handful of extra static images per card
+    rather than a per-frame render. A 45-second video ends up around 150 small
+    ImageClips, which composites fine.
+    """
     clips = []
     font_path = style.font_file
 
@@ -233,17 +246,53 @@ def _build_caption_clips(
             continue
 
         duration = max(card.duration, 0.1)
-        text_img = _render_text_card(card.text, style, font_path)
-        text_clip = (
-            ImageClip(text_img)
-            .set_duration(duration)
-            .set_start(card.start_time)
-            .set_position(("center", CAPTION_CENTER_Y - text_img.shape[0] // 2))
-        )
-        text_clip = text_clip.fadein(style.fade_in_duration)
-        clips.append(text_clip)
 
-    print(f"[video_compositor] \u2713 Built {len(clips)} caption clips")
+        if not style.highlight_active_word or not card.word_times:
+            img = _render_text_card(card.words, -1, style, font_path)
+            clips.append(
+                ImageClip(img)
+                .set_duration(duration)
+                .set_start(card.start_time)
+                .set_position(("center", CAPTION_CENTER_Y - img.shape[0] // 2))
+                .fadein(style.fade_in_duration)
+            )
+            continue
+
+        # One sub-clip per word, each covering that word's speaking window.
+        # The card's own bounds clamp the ends so highlights never bleed past
+        # the card or leave a gap where no caption is on screen at all.
+        segments = []
+        for i, (ws, we) in enumerate(card.word_times):
+            seg_start = max(ws, card.start_time)
+            seg_end = min(we, card.end_time)
+            if seg_end > seg_start:
+                segments.append((seg_start, seg_end, i))
+
+        # Fill any silence between words by extending the previous highlight,
+        # rather than dropping back to flat text for a few frames (which reads
+        # as a flicker).
+        filled = []
+        for idx, (s, e, wi) in enumerate(segments):
+            nxt = segments[idx + 1][0] if idx + 1 < len(segments) else card.end_time
+            filled.append((s, max(e, min(nxt, card.end_time)), wi))
+
+        if filled and filled[0][0] > card.start_time:
+            filled.insert(0, (card.start_time, filled[0][0], -1))
+
+        for si, (s, e, wi) in enumerate(filled):
+            img = _render_text_card(card.words, wi, style, font_path)
+            clip = (
+                ImageClip(img)
+                .set_duration(max(e - s, 0.02))
+                .set_start(s)
+                .set_position(("center", CAPTION_CENTER_Y - img.shape[0] // 2))
+            )
+            if si == 0:
+                clip = clip.fadein(style.fade_in_duration)
+            clips.append(clip)
+
+    print(f"[video_compositor] \u2713 Built {len(clips)} caption clips "
+          f"({'word highlight ON' if style.highlight_active_word else 'flat'})")
     return clips
 
 
@@ -263,49 +312,72 @@ def _load_font(font_path: str, font_size: int):
     return font
 
 
-def _render_text_card(text: str, style: CaptionStyle, font_path: str) -> np.ndarray:
-    """Renders text to a numpy RGBA image array using PIL for max quality."""
+def _render_text_card(words, active_index: int, style: CaptionStyle, font_path: str) -> np.ndarray:
+    """Renders one caption card, colouring `active_index` in the highlight
+    colour and everything else in the base colour.
+
+    Words are measured and drawn individually rather than as one string,
+    because PIL can only apply a single fill per draw.text() call. Measuring
+    each word separately is also what lets the highlight sit exactly under the
+    right word instead of being approximated from a character offset.
+    """
+    if isinstance(words, str):
+        words = words.split()
+    if not words:
+        return np.zeros((1, 1, 4), dtype=np.uint8)
+
     font_size = style.font_size
     max_w = int(VIDEO_WIDTH * style.max_width_ratio)
     padding = style.bg_padding
 
-    try:
-        font = _load_font(font_path, font_size) if font_path else ImageFont.load_default()
-    except Exception:
-        font = ImageFont.load_default()
-
-    dummy_img = Image.new("RGBA", (VIDEO_WIDTH, 200))
-    dummy_draw = ImageDraw.Draw(dummy_img)
-    bbox = dummy_draw.textbbox((0, 0), text, font=font)
-    text_w, text_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
-
-    while text_w > max_w and font_size > 30:
-        font_size -= 4
+    def load(size):
         try:
-            font = _load_font(font_path, font_size) if font_path else ImageFont.load_default()
+            return _load_font(font_path, size) if font_path else ImageFont.load_default()
         except Exception:
-            break
-        bbox = dummy_draw.textbbox((0, 0), text, font=font)
-        text_w, text_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+            return ImageFont.load_default()
 
-    img_w, img_h = text_w + padding * 2, text_h + padding * 2
+    font = load(font_size)
+    measure = ImageDraw.Draw(Image.new("RGBA", (8, 8)))
+
+    def layout(f):
+        space = measure.textlength(" ", font=f)
+        widths = [measure.textlength(w, font=f) for w in words]
+        return widths, space, sum(widths) + space * (len(words) - 1)
+
+    widths, space_w, total_w = layout(font)
+    # Shrink to fit rather than overflowing off the side of the frame.
+    while total_w > max_w and font_size > 30:
+        font_size -= 4
+        font = load(font_size)
+        widths, space_w, total_w = layout(font)
+
+    bbox = measure.textbbox((0, 0), " ".join(words), font=font)
+    text_h = bbox[3] - bbox[1]
+    ascent_pad = bbox[1]
+
+    img_w = int(total_w + padding * 2)
+    img_h = int(text_h + padding * 2)
     img = Image.new("RGBA", (max(img_w, 1), max(img_h, 1)), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
     if style.bg_box:
-        bg_color = _hex_to_rgba(style.bg_color)
-        draw.rounded_rectangle([(0, 0), (img_w, img_h)], radius=14, fill=bg_color)
+        draw.rounded_rectangle([(0, 0), (img_w, img_h)], radius=14, fill=_hex_to_rgba(style.bg_color))
 
-    if style.stroke_width > 0:
-        stroke = style.stroke_width
-        stroke_color = _hex_to_rgb(style.stroke_color)
-        for dx in range(-stroke, stroke + 1):
-            for dy in range(-stroke, stroke + 1):
-                if dx != 0 or dy != 0:
-                    draw.text((padding + dx, padding + dy), text, font=font, fill=(*stroke_color, 255))
+    base_color = (*_hex_to_rgb(style.font_color), 255)
+    hi_color = (*_hex_to_rgb(style.highlight_color), 255)
+    stroke_color = (*_hex_to_rgb(style.stroke_color), 255)
 
-    text_color = _hex_to_rgb(style.font_color)
-    draw.text((padding, padding), text, font=font, fill=(*text_color, 255))
+    x = float(padding)
+    y = float(padding - ascent_pad)
+    for i, word in enumerate(words):
+        if style.stroke_width > 0:
+            s = style.stroke_width
+            for dx in range(-s, s + 1):
+                for dy in range(-s, s + 1):
+                    if dx or dy:
+                        draw.text((x + dx, y + dy), word, font=font, fill=stroke_color)
+        draw.text((x, y), word, font=font, fill=hi_color if i == active_index else base_color)
+        x += widths[i] + space_w
 
     return np.array(img)
 
