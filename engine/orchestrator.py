@@ -123,6 +123,14 @@ def run_generation_pipeline():
         )
         return
 
+    # Clear out jobs stuck in "Awaiting Render". A row gets that status the
+    # moment you save a storyboard, and only leaves it when a render job picks
+    # it up. If the render never ran — workflow failed, was cancelled, or was
+    # never triggered — the row sits in the queue forever looking like work
+    # that is about to happen. Nothing cleaned those up, so they accumulated
+    # and had to be deleted by hand.
+    _expire_stale_render_jobs(db)
+
     topics = db.table("topics").select("*").eq("is_active", True).execute().data
     tones = db.table("tones").select("*").eq("is_active", True).execute().data
 
@@ -195,6 +203,21 @@ def run_generation_pipeline():
                 concept_rejected += 1
                 print(f"[orchestrator] \u2717 Skipped as repeat ({dup['reason']}, "
                       f"score {dup['score']}) — too close to: {dup['matched_title']!r}")
+                continue
+
+            # Second, independent check: near-identical SCRIPT text against
+            # every video generated recently, whatever its status.
+            # duplicate_check has always run, but only as a FLAG applied after
+            # rendering, which stopped auto-approve and nothing else — so a
+            # repeat still got fully rendered and still landed in the queue.
+            # Checking here means an identical script costs one model call
+            # instead of five minutes of render time.
+            script_dup = duplicate_check.check_duplicate(storyboard, db=db)
+            if script_dup.get("is_duplicate"):
+                concept_rejected += 1
+                print(f"[orchestrator] \u2717 Skipped: script is "
+                      f"{script_dup['similarity']:.0%} identical to "
+                      f"{script_dup['matched_title']!r}")
                 continue
 
             result = _render_pipeline(
@@ -449,6 +472,37 @@ def _save_and_finalize(db, result, job_id, topic_id, tone_id, render_style, tone
     }).execute()
 
     storage_module.upload_video(result["video_path"], job_id, db=db)
+
+
+def _expire_stale_render_jobs(db, max_age_hours: int = 3):
+    """Marks jobs that have been 'queued_for_render' too long as failed.
+
+    3 hours is well beyond the longest legitimate render (about 40 minutes for
+    a full batch), so anything older is genuinely stuck rather than slow.
+    """
+    from datetime import datetime, timezone, timedelta
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).isoformat()
+        stale = (
+            db.table("videos").select("id, job_id")
+            .eq("status", "queued_for_render")
+            .lt("created_at", cutoff)
+            .execute().data
+        ) or []
+        if not stale:
+            return
+        for row in stale:
+            db.table("videos").update({
+                "status": "failed",
+                "error_log": (
+                    f"Stuck in 'Awaiting Render' for over {max_age_hours} hours. "
+                    "The render job never ran or did not finish — check the Actions tab. "
+                    "Re-create it from Create Video if you still want this one."
+                ),
+            }).eq("id", row["id"]).execute()
+        print(f"[orchestrator] Cleared {len(stale)} stale 'Awaiting Render' job(s).")
+    except Exception as e:
+        print(f"[orchestrator] \u26a0 Could not clear stale render jobs: {e}")
 
 
 def _log_failure(db: Client, job_id: str, topic: dict, tone: dict, error: str):

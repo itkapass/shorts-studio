@@ -42,7 +42,7 @@ from engine.config import get
 
 # Above either of these, a new concept is treated as a repeat.
 LEXICAL_CEILING = 0.50    # TF-IDF cosine on title + premise
-TOPICAL_CEILING = 0.50    # Jaccard on extracted keyword sets
+TOPICAL_CEILING = 0.32    # keyword overlap (see _topical_similarity)
 LOOKBACK_DAYS = 120       # concepts older than this stop blocking new ones
 LEDGER_PATH = "concepts.jsonl"
 
@@ -61,10 +61,28 @@ def _keywords(text: str) -> set:
     return {w for w in words if w not in _STOPWORDS}
 
 
-def _jaccard(a: set, b: set) -> float:
+def _topical_similarity(a: set, b: set) -> float:
+    """How much two keyword sets are about the same thing.
+
+    Originally plain Jaccard (intersection / union), which was too forgiving.
+    Union grows with every word either side uses, so two videos about the
+    identical subject written at different lengths scored around 0.25 and
+    slipped under a 0.50 ceiling. That is how the same idea came out three
+    times.
+
+    Overlap coefficient (intersection / size of the smaller set) does not get
+    diluted by length. Measured across known same/different pairs, same-idea
+    pairs land at 0.25-0.62 and genuinely different pairs at 0.00, so a 0.32
+    ceiling separates them cleanly with room on both sides.
+
+    The max of both is used so neither measure can hide a repeat on its own.
+    """
     if not a or not b:
         return 0.0
-    return len(a & b) / len(a | b)
+    inter = len(a & b)
+    jaccard = inter / len(a | b)
+    overlap = inter / min(len(a), len(b))
+    return max(jaccard, overlap)
 
 
 def concept_signature(storyboard: dict) -> dict:
@@ -96,16 +114,41 @@ def _db():
 
 
 def load_ledger(lookback_days: int = LOOKBACK_DAYS, db=None) -> list:
-    """Reads used concepts from the database, newest first.
+    """Reads used concepts, newest first.
 
-    Fails open and returns [] on any error: an unreachable ledger should slow
-    nothing down. The cost of that choice is one possibly-repeated video; the
-    cost of the opposite choice is the whole day's generation stopping.
+    Reads from TWO places, and the second one matters more than it looks:
+
+      1. The `concepts` table — ideas from videos that were actually published.
+      2. The `videos` table — every video that has been GENERATED and not
+         rejected, including ones still sitting in the review queue.
+
+    Source 2 was missing originally and it was a real bug. The reasoning for
+    recording concepts only on approval was that a rejected video shouldn't
+    burn its idea — which is correct on its own, but it left a blind spot
+    exactly the size of the review backlog. With 20 videos pending and none
+    approved, the ledger was empty, so every run happily rewrote ideas that
+    had already been rendered. That is how the same script came out three
+    times with different footage.
+
+    An idea that has already been turned into a video is used up for
+    generation purposes, whether or not a human has got round to approving it.
+
+    Fails open and returns [] on error: an unreachable ledger should slow
+    nothing down. The cost is one possibly-repeated video; the cost of the
+    opposite choice is the whole day's generation stopping.
     """
+    rows = []
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
+
     try:
         db = db or _db()
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
-        rows = (
+    except Exception as e:
+        print(f"[concept_memory] ⚠ Could not connect, continuing without a ledger: {e}")
+        return []
+
+    # 1. Published concepts
+    try:
+        rows += (
             db.table("concepts")
             .select("title, premise, keywords, archetype, created_at")
             .gte("created_at", cutoff)
@@ -114,10 +157,49 @@ def load_ledger(lookback_days: int = LOOKBACK_DAYS, db=None) -> list:
             .execute()
             .data
         ) or []
-        return rows
     except Exception as e:
-        print(f"[concept_memory] ⚠ Could not load ledger, continuing without it: {e}")
-        return []
+        print(f"[concept_memory] ⚠ Could not read the concepts table: {e}")
+
+    # 2. Concepts from videos already generated but not yet published
+    try:
+        videos = (
+            db.table("videos")
+            .select("title, storyboard, archetype, created_at, status")
+            .gte("created_at", cutoff)
+            .neq("status", "rejected")
+            .order("created_at", desc=True)
+            .limit(300)
+            .execute()
+            .data
+        ) or []
+        for v in videos:
+            storyboard = v.get("storyboard")
+            if isinstance(storyboard, str):
+                try:
+                    storyboard = json.loads(storyboard)
+                except Exception:
+                    storyboard = None
+            if not storyboard:
+                continue
+            sig = concept_signature(storyboard)
+            if not sig.get("title"):
+                sig["title"] = v.get("title") or ""
+            sig["created_at"] = v.get("created_at") or sig["created_at"]
+            rows.append(sig)
+    except Exception as e:
+        print(f"[concept_memory] ⚠ Could not read pending videos: {e}")
+
+    # Same idea can appear in both sources; keep one copy.
+    seen, unique = set(), []
+    for r in rows:
+        key = (r.get("title") or "").strip().lower()
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        unique.append(r)
+
+    return unique
 
 
 def check_concept(storyboard: dict, ledger: list = None, db=None) -> dict:
@@ -134,7 +216,7 @@ def check_concept(storyboard: dict, ledger: list = None, db=None) -> dict:
     new_kw = set(sig["keywords"])
     best_topical, best_topical_title = 0.0, None
     for row in ledger:
-        score = _jaccard(new_kw, set(row.get("keywords") or []))
+        score = _topical_similarity(new_kw, set(row.get("keywords") or []))
         if score > best_topical:
             best_topical, best_topical_title = score, row.get("title")
 
