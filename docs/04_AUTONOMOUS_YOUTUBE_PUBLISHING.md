@@ -33,7 +33,7 @@ instead — that's a legitimate choice, just go in knowing which one you're maki
 
 ## Step 2: One-Time Local YouTube Authorization
 ```bash
-python engine/publisher.py --setup
+python -m engine.publisher --setup
 ```
 A browser window opens — sign in and grant permission. Unlike before, this now
 **prints the three values you need directly to your terminal**:

@@ -42,6 +42,18 @@ from datetime import datetime, timezone
 
 import requests
 
+import os
+import sys
+
+# Allow BOTH `python -m engine.publisher --setup` (correct) and
+# `python engine/publisher.py --setup` (what people naturally type).
+# Running a file directly puts engine/ on sys.path instead of the project root,
+# so `from engine.config import ...` fails with ModuleNotFoundError. Adding the
+# project root here makes the natural command work too, because telling a
+# beginner "you typed it wrong" is a worse answer than making both work.
+if __package__ in (None, ""):
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from engine.config import get
 
 EXPORT_ROOT = os.path.join(get("OUTPUT_DIR", "output"), "manual_exports")
@@ -250,12 +262,47 @@ def _write_srt(storyboard: dict, path: str):
         f.write("\n".join(lines))
 
 
+def export_all_pending(db=None, delete_after: bool = True) -> list:
+    """Packages every video marked 'needs_manual'.
+
+    Used by the publish workflow so a whole batch is exported in one run and
+    collected as a single downloadable artifact.
+    """
+    if db is None:
+        from supabase import create_client
+        db = create_client(get("SUPABASE_URL"), get("SUPABASE_SERVICE_KEY"))
+
+    rows = (
+        db.table("videos").select("job_id")
+        .eq("status", "needs_manual").limit(20).execute().data
+    ) or []
+
+    if not rows:
+        print("[manual_export] Nothing marked for manual posting.")
+        return []
+
+    done = []
+    for row in rows:
+        result = export_for_manual_posting(row["job_id"], db=db, delete_after=delete_after)
+        if result.get("ok"):
+            done.append(result["zip"])
+    print(f"[manual_export] \u2713 Packaged {len(done)} video(s).")
+    return done
+
+
 if __name__ == "__main__":
     import argparse
     p = argparse.ArgumentParser(description="Build a manual-posting package for a video.")
-    p.add_argument("--job-id", required=True)
+    p.add_argument("--job-id")
+    p.add_argument("--all-pending", action="store_true",
+                   help="Package every video marked 'needs_manual'")
     p.add_argument("--keep-storage", action="store_true",
                    help="Do not delete the stored file after exporting")
     a = p.parse_args()
+    if a.all_pending:
+        export_all_pending(delete_after=not a.keep_storage)
+        raise SystemExit(0)
+    if not a.job_id:
+        p.error("give --job-id or --all-pending")
     result = export_for_manual_posting(a.job_id, delete_after=not a.keep_storage)
     raise SystemExit(0 if result.get("ok") else 1)

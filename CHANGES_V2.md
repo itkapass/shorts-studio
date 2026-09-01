@@ -44,7 +44,7 @@ Also removed a 75 MB model download and ~40 seconds from every render.
 
 | Warning | Fix |
 |---|---|
-| YouTube login expires every 7 days | docs/07 §3 — switch to "In production", permanent |
+| YouTube login expires every 7 days | docs/07 — needs 3 public pages first; `docs-site/` provides them |
 | Gemini model name goes stale | Auto-discovers the current model from Google's live list |
 | ffmpeg must be installed locally | Render on Actions; clear error message if it's missing |
 | Publish-per-run too high | Per-channel caps, stops *before* the API call |
@@ -90,3 +90,30 @@ docs/00, 06, 07, 08, 09
 
 `engine/storage.py` is now a shim forwarding to `storage_r2.py`, so any existing
 command still works.
+
+
+## Corrections to the previous docs
+
+Two mistakes in the first version of these docs, both fixed here:
+
+1. **"Switching OAuth to Production is a 2-minute click"** — wrong. Google
+   requires a public home page, privacy policy and terms of service on an
+   authorized domain before it will let you publish an External app. The
+   `docs-site/` folder now contains all three pages ready to host free on
+   GitHub Pages, and docs/07 walks through it.
+
+2. **`python engine/publisher.py --setup`** — wrong command. Running a file
+   directly puts `engine/` on the Python path instead of the project root, so
+   the `engine.config` import fails. The correct form is
+   `python -m engine.publisher --setup`. Every script now also accepts the
+   direct form, because making both work beats telling someone they typed it
+   wrong.
+
+## New files
+
+```
+docs-site/index.html      app home page      } required by Google
+docs-site/privacy.html    privacy policy     } before it will let you
+docs-site/terms.html      terms of service   } publish to Production
+docs-site/_style.css
+```

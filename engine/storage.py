@@ -12,6 +12,18 @@ new module. There is no separate implementation to drift out of sync.
 
 New code should import engine.storage_r2 directly.
 """
+import os
+import sys
+
+# Allow BOTH `python -m engine.publisher --setup` (correct) and
+# `python engine/publisher.py --setup` (what people naturally type).
+# Running a file directly puts engine/ on sys.path instead of the project root,
+# so `from engine.config import ...` fails with ModuleNotFoundError. Adding the
+# project root here makes the natural command work too, because telling a
+# beginner "you typed it wrong" is a worse answer than making both work.
+if __package__ in (None, ""):
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from engine.storage_r2 import (  # noqa: F401
     upload_video, delete_video, usage_mb, check_storage_pressure, backend_name,
 )

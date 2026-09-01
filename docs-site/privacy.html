@@ -1,0 +1,68 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Privacy Policy — Shorts Studio</title><link rel="stylesheet" href="_style.css"></head><body>
+<div class="wrap">
+<header>
+  <h1>Privacy Policy</h1>
+  <p class="lede">How Shorts Studio handles Google user data.</p>
+  <nav style="margin-top:1rem"><a href="index.html">Home</a><a href="terms.html">Terms of Service</a></nav>
+  <p class="meta">Last updated: 30 August 2026</p>
+</header>
+
+<h2>1. Who this covers</h2>
+<p>Shorts Studio is self-hosted software. The person who installs and runs it (the "operator") is the only user. This policy describes how the software handles data belonging to that operator's own Google Account.</p>
+
+<h2>2. What Google user data is accessed</h2>
+<p>The application requests a single OAuth scope:</p>
+<ul>
+  <li><code>https://www.googleapis.com/auth/youtube.upload</code> — permission to upload video files to the operator's YouTube channel.</li>
+</ul>
+<p>This scope is used exclusively to call the YouTube Data API <code>videos.insert</code> endpoint. No other Google API is called and no other scope is requested.</p>
+
+<h2>3. How that data is used</h2>
+<p>The access token obtained through this scope is used for one action: uploading a video file, together with its title, description and tags, to the operator's own YouTube channel, after the operator has approved that video for publishing.</p>
+
+<h2>4. How credentials are stored</h2>
+<ul>
+  <li>The OAuth client ID, client secret and refresh token are stored as encrypted repository secrets in the operator's own GitHub account, or in a local environment file on the operator's own machine.</li>
+  <li>Credentials are never written to a database, never logged, and never included in any file the software produces.</li>
+  <li>Credentials are read into memory only for the duration of an upload and are not persisted anywhere else.</li>
+</ul>
+
+<h2>5. Data sharing</h2>
+<p>No Google user data is shared with any third party. The software has no analytics, no telemetry, no crash reporting, and no external service that receives account information. It communicates with the following services, none of which receive Google account credentials or Google user data:</p>
+<ul>
+  <li>Google Gemini API — receives only topic text for script writing.</li>
+  <li>Pexels API — receives only stock-footage search keywords.</li>
+  <li>Supabase — stores video metadata (titles, descriptions, status) belonging to the operator.</li>
+  <li>Cloudflare R2 or Supabase Storage — stores the rendered video files temporarily.</li>
+</ul>
+
+<h2>6. Data retention and deletion</h2>
+<ul>
+  <li>Rendered video files are deleted from storage immediately after a video is published, rejected, or exported.</li>
+  <li>Video metadata is retained in the operator's own database until the operator deletes it.</li>
+  <li>The operator can revoke this application's access at any time at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>. Doing so immediately and permanently ends all access.</li>
+  <li>Deleting the stored refresh token also ends all access.</li>
+</ul>
+
+<h2>7. Limited Use disclosure</h2>
+<p>Shorts Studio's use of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements. Specifically:</p>
+<ul>
+  <li>Google user data is used only to provide the video-upload feature described above.</li>
+  <li>Google user data is not transferred to any third party except as required to provide that feature.</li>
+  <li>Google user data is not used for advertising purposes.</li>
+  <li>No human reads Google user data, except as required for security purposes or to comply with applicable law.</li>
+</ul>
+
+<h2>8. Children</h2>
+<p>This software is not directed at children and is not intended for use by anyone under 18.</p>
+
+<h2>9. Changes</h2>
+<p>Any change to this policy will be published on this page with an updated date above.</p>
+
+<h2>10. Contact</h2>
+<p>Questions about this policy can be sent to the developer contact email listed on the OAuth consent screen for this application.</p>
+
+<footer><p><a href="index.html">Home</a> &middot; <a href="terms.html">Terms</a></p></footer>
+</div></body></html>

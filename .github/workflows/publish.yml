@@ -55,3 +55,27 @@ jobs:
           YOUTUBE_REFRESH_TOKEN:  ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
           python -m engine.publish_approved
+
+      # Package anything marked "post it myself" and attach it to this run.
+      # Without the artifact upload the zip is built inside the runner and
+      # then thrown away when the job ends, so there would be no way to get
+      # the file. Download it from the Summary page of this workflow run.
+      - name: Package videos for manual posting
+        if: always()
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_PUBLIC_BASE: ${{ secrets.R2_PUBLIC_BASE }}
+        run: python -m engine.manual_export --all-pending || true
+
+      - name: Upload manual-posting packages
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: manual-posting-packages
+          path: output/manual_exports/**/*.zip
+          if-no-files-found: ignore
+          retention-days: 30

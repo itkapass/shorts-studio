@@ -1,0 +1,44 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Shorts Studio</title><link rel="stylesheet" href="_style.css"></head><body>
+<div class="wrap">
+<header>
+  <h1>Shorts Studio</h1>
+  <p class="lede">A self-hosted tool that writes, renders and uploads short-form videos to its owner's own YouTube channel.</p>
+  <nav style="margin-top:1rem"><a href="privacy.html">Privacy Policy</a><a href="terms.html">Terms of Service</a></nav>
+</header>
+
+<h2>What this application does</h2>
+<p>Shorts Studio is a personal, self-hosted video production pipeline. It runs on a schedule and performs the following steps automatically:</p>
+<ul>
+  <li>Writes a short video script using a text-generation model.</li>
+  <li>Generates a voiceover from that script using text-to-speech.</li>
+  <li>Renders a vertical 1080&times;1920 video with animated characters or licensed stock footage, plus burned-in captions.</li>
+  <li>Places the finished video in a review queue for a human to approve or reject.</li>
+  <li><strong>Once a human approves it</strong>, uploads the video to the operator's own YouTube channel using the YouTube Data API v3.</li>
+</ul>
+
+<h2>Why it requests YouTube access</h2>
+<p>The application requests the <code>youtube.upload</code> scope for one purpose only: to upload finished video files to the YouTube channel belonging to the person operating the software.</p>
+<div class="box">
+  <p style="margin:0"><strong>This is single-operator software.</strong> Each person who uses Shorts Studio runs their own copy, with their own credentials, connected to their own YouTube channel. There is no shared service, no multi-tenant server, and no third party who receives access to anyone's account.</p>
+</div>
+
+<h2>What it does not do</h2>
+<ul>
+  <li>It does not read, list, modify or delete any existing videos on the account.</li>
+  <li>It does not access comments, subscribers, analytics, playlists or channel settings.</li>
+  <li>It does not access any other Google service — no Gmail, Drive, Contacts, Calendar or Photos.</li>
+  <li>It does not transmit Google user data to any third party.</li>
+</ul>
+
+<h2>Human review before publishing</h2>
+<p>No video is uploaded without a person explicitly approving it first. Automated quality checks reject broken renders before a human ever sees them, and a duplicate-concept check prevents the same idea being produced twice.</p>
+
+<h2>Open source</h2>
+<p>The complete source code is available to the operator, who self-hosts and runs it. There is no hosted version and no account to sign up for.</p>
+
+<footer>
+  <p>Shorts Studio &middot; personal self-hosted software &middot; <a href="privacy.html">Privacy</a> &middot; <a href="terms.html">Terms</a></p>
+</footer>
+</div></body></html>

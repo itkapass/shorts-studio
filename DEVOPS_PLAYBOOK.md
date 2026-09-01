@@ -101,7 +101,7 @@ To authorize automated publishing without entering your password every time:
 2. Save the file in your project as: `engine/youtube_client_secrets.json`.
 3. Run the one-time interactive login command:
    ```bash
-   python engine/publisher.py --setup
+   python -m engine.publisher --setup
    ```
 4. A browser window will open $\rightarrow$ Sign in to the Google account connected to your YouTube channel $\rightarrow$ Click **Continue/Allow**.
 5. This generates `engine/youtube_token.pickle`.
