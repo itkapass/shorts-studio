@@ -133,6 +133,7 @@ export default function SettingsPage() {
               value={settings.default_render_style}
               onChange={e => setSettings({ ...settings, default_render_style: e.target.value })}
             >
+              <option value="character_skit">Character Skit — animated characters talking (comedy, dialogue)</option>
               <option value="stock_footage">Stock Footage — real b-roll with a Ken Burns zoom</option>
               <option value="whiteboard_sketch">Whiteboard Sketch — hand-drawn icons on paper</option>
               <option value="quote_card">Quote Card — minimal drifting gradient, captions only</option>

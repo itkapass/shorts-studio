@@ -167,7 +167,17 @@ def run_generation_pipeline():
         # The archetype decides the KIND of video. A topic can pin one; if it
         # does not, rotate through the allowed set so a channel does not end
         # up publishing the same format every single day.
-        archetype = topic.get("archetype") or arch.archetype_names()[i % len(arch.archetype_names())]
+        # Rotate on the DAY plus the index, not the index alone.
+        #
+        # This was a real bug: `i` restarts at 0 every run, so with 5 videos a
+        # day the rotation only ever reached the first 5 of 10 archetypes.
+        # Dark humour, sarcasm, absurd and observational were unreachable —
+        # not rare, impossible. Adding the day-of-year advances the starting
+        # point every day, so the full set gets used over time.
+        from datetime import datetime, timezone
+        day = datetime.now(timezone.utc).timetuple().tm_yday
+        all_arch = arch.archetype_names()
+        archetype = topic.get("archetype") or all_arch[(day + i) % len(all_arch)]
         allowed, block_reason = arch.is_combination_allowed(
             f"{topic.get('name','')} {topic.get('description','')}", archetype
         )
@@ -178,7 +188,7 @@ def run_generation_pipeline():
         # The third axis: the SHAPE of the video. Rotated rather than random,
         # because random repeats in visible clumps and three POV videos in a
         # row is exactly what makes a channel look automated.
-        structure = topic.get("structure") or narrative.pick_structure(archetype, i)
+        structure = topic.get("structure") or narrative.pick_structure(archetype, day + i)
 
         render_style = topic.get("render_style") or arch.suggest_style(archetype, default_style)
         if render_style not in available_styles():

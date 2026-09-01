@@ -20,6 +20,7 @@ export default function TopicStudio() {
     custom_context: '',
     category: 'tech',
     render_style: '',
+    archetype: '',
     is_active: true
   })
 
@@ -46,6 +47,7 @@ export default function TopicStudio() {
       custom_context: '',
       category: 'tech',
       render_style: '',
+      archetype: '',
       is_active: true
     })
     setEditingItem(true)
@@ -59,6 +61,7 @@ export default function TopicStudio() {
       custom_context: item.custom_context || '',
       category: item.category || 'tech',
       render_style: item.render_style || '',
+      archetype: item.archetype || '',
       is_active: item.is_active ?? true
     })
     setEditingItem(item)
@@ -196,11 +199,46 @@ export default function TopicStudio() {
                     <option value="education">Education / Science</option>
                     <option value="lifestyle">Lifestyle / Advice</option>
                     <option value="sarcasm">Sarcasm / Comedy</option>
+                    <option value="comedy">Comedy / Skits</option>
                   </select>
                 </div>
               )}
 
               {activeTab === 'topics' && (
+                <>
+                <div className="form-group">
+                  <label className="form-label">Content Format</label>
+                  <select
+                    className="form-select"
+                    value={formState.archetype || ''}
+                    onChange={e => setFormState({ ...formState, archetype: e.target.value })}
+                  >
+                    <option value="">Rotate automatically (recommended)</option>
+                    <optgroup label="Informative">
+                      <option value="informative">Unknown Facts — a surprising true thing</option>
+                      <option value="myth_busting">Myth vs Fact — correct a common belief</option>
+                      <option value="life_hack">Daily Hacks — a small practical trick</option>
+                    </optgroup>
+                    <optgroup label="Comedy">
+                      <option value="dark_humour">Dark Humour — bleak, deadpan</option>
+                      <option value="sarcasm">Sarcasm — praising something absurd</option>
+                      <option value="absurd">Absurd — stupid premise, played straight</option>
+                      <option value="observational">Observational — stand-up style noticing</option>
+                    </optgroup>
+                    <optgroup label="Character &amp; feeling">
+                      <option value="relatable">Relatable — the thing nobody says out loud</option>
+                      <option value="wholesome">Wholesome — warm and gentle</option>
+                      <option value="empathy">Social &amp; Human — inequality, hardship</option>
+                    </optgroup>
+                  </select>
+                  <div className="form-hint">
+                    <strong>This is what decides whether you get comedy or facts.</strong> The
+                    comedy formats automatically use animated characters, so pick one of those
+                    for skits, dialogue and jokes. Leave on <em>Rotate</em> and the app cycles
+                    through all ten over time, which keeps a channel from going stale.
+                  </div>
+                </div>
+
                 <div className="form-group">
                   <label className="form-label">Visual Style</label>
                   <select
@@ -208,7 +246,8 @@ export default function TopicStudio() {
                     value={formState.render_style}
                     onChange={e => setFormState({ ...formState, render_style: e.target.value })}
                   >
-                    <option value="">Use global default (Settings page)</option>
+                    <option value="">Match the content format (recommended)</option>
+                    <option value="character_skit">Character Skit (comedy / dialogue)</option>
                     <option value="stock_footage">Stock Footage</option>
                     <option value="whiteboard_sketch">Whiteboard Sketch</option>
                     <option value="quote_card">Quote Card</option>
@@ -222,6 +261,7 @@ export default function TopicStudio() {
                     of abstract ideas, so those searches return mismatched filler.
                   </div>
                 </div>
+                </>
               )}
             </div>
 
