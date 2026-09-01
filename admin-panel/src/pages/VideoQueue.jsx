@@ -33,6 +33,29 @@ async function requestManualExport(video, setBusy, setMsg) {
   }
 }
 
+
+// How long ago a video was generated, in plain words. Timestamps come back as
+// UTC from Supabase; Date handles the conversion to local time.
+function timeAgo(iso) {
+  const then = new Date(iso).getTime()
+  if (!then) return ''
+  const mins = Math.floor((Date.now() - then) / 60000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  const days = Math.floor(hrs / 24)
+  if (days < 7) return `${days}d ago`
+  return new Date(iso).toLocaleDateString()
+}
+
+// Anything from the last 2 hours is "new" — long enough to cover a full
+// generation run, short enough that it still means something.
+function isRecent(iso) {
+  const then = new Date(iso).getTime()
+  return then && (Date.now() - then) < 2 * 60 * 60 * 1000
+}
+
 export default function VideoQueue() {
   const [videos, setVideos] = useState([])
   const [filter, setFilter] = useState('pending') // 'pending' | 'approved' | 'published' | 'all'
@@ -258,6 +281,24 @@ export default function VideoQueue() {
                         <span className={`badge badge-${video.status}`}>
                           {video.status.replace(/_/g, ' ')}
                         </span>
+                        {/* Age. Without this there is no way to tell a video
+                            made ten minutes ago from one made last week, which
+                            makes it impossible to confirm a generation run
+                            actually produced anything. */}
+                        {video.created_at && (
+                          <span
+                            className="badge"
+                            title={new Date(video.created_at).toLocaleString()}
+                            style={
+                              isRecent(video.created_at)
+                                ? { background: '#1f6f43', color: '#d9f7e6' }
+                                : { background: 'var(--bg-elevated)', color: 'var(--text-secondary)' }
+                            }
+                          >
+                            {isRecent(video.created_at) ? '✨ NEW · ' : '🕐 '}
+                            {timeAgo(video.created_at)}
+                          </span>
+                        )}
                         {video.render_style && (
                           <span className="badge" style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)' }}>
                             🎨 {video.render_style.replace(/_/g, ' ')}
