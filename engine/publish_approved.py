@@ -99,7 +99,7 @@ def run_publish_pipeline():
             creds = None
             if all_channels:
                 channel = channels_mod.route(row.get("category") or row.get("archetype") or "",
-                                             channels=all_channels)
+                                             channels=all_channels, persona_key=row.get("persona_key"))
                 if not channel:
                     print(f"[publish] \u26a0 No channel accepts category "
                           f"'{row.get('category')}'. Leaving for manual export.")

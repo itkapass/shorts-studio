@@ -57,6 +57,7 @@ from engine import archetypes as arch
 from engine import model_registry
 from engine.character import library as charlib
 from engine import narrative
+from engine import brief as brief_mod
 from engine import props as props_lib
 
 # gemini-1.5-flash (the previous hardcoded value) is almost certainly
@@ -97,7 +98,33 @@ def _get_client():
     return client, model_name
 
 
-def _call_model_with_clear_errors(client, model_name, system_prompt, user_prompt):
+def _call_model_with_clear_errors(client, model_name, system_prompt, user_prompt, temperature=None):
+    """Calls Gemini and retries transient failures.
+
+    TEMPERATURE, EXPLAINED (you asked to learn real AI-engineering concepts —
+    this is one of the core ones):
+
+    It controls how much the model is allowed to gamble on a less-likely next
+    word instead of always taking the safest one.
+
+      0.0  -> always picks the single most probable word. Deterministic,
+             same input gives the same output every time. Reads as flat and
+             generic, because "most probable" is also "most expected".
+      0.9  -> (the default here) frequently takes a less-obvious but still
+             sensible word. This is what makes two videos on the same topic
+             come out differently phrased, which is exactly what a comedy or
+             hook-writing task needs — the obvious phrasing is rarely the
+             funniest one.
+      1.5+ -> gambles often enough that output starts breaking: odd word
+             choices, sentences that technically parse but read as strange.
+
+    0.9 is deliberately high for this app because retrieval-style tasks
+    (get me a correct fact) want low temperature, but WRITING tasks (make me
+    a hook nobody else would write) want higher temperature. You can change
+    it in Settings and watch the difference yourself — that live feedback
+    loop is the fastest way to actually understand what the number does.
+    """
+    temperature = 0.9 if temperature is None else float(temperature)
     last_error = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
@@ -107,7 +134,7 @@ def _call_model_with_clear_errors(client, model_name, system_prompt, user_prompt
                 config=types.GenerateContentConfig(
                     system_instruction=system_prompt,
                     response_mime_type="application/json",
-                    temperature=0.9,
+                    temperature=temperature,
                     top_p=0.95,
                 ),
             )
@@ -135,7 +162,8 @@ def _call_model_with_clear_errors(client, model_name, system_prompt, user_prompt
 # ─── Prompt Templates ────────────────────────────────────────────────────────
 
 def _build_system_prompt(render_style: str, num_scenes: int, archetype: str = None,
-                         avoid_list: str = "", structure: str = None) -> str:
+                         avoid_list: str = "", structure: str = None,
+                         creative_brief: dict = None) -> str:
     if render_style == "character_skit":
         cast_lines = "\n".join(
             f'   - "{k}" = {v["label"]}: {v["desc"]}' for k, v in charlib.CHARACTERS.items()
@@ -216,6 +244,7 @@ def _build_system_prompt(render_style: str, num_scenes: int, archetype: str = No
     ]))
 
     archetype_block = arch.prompt_block(archetype) if archetype else ""
+    brief_block = brief_mod.prompt_block(creative_brief) if creative_brief else ""
     structure_block = (
         "\n\n" + narrative.prompt_block(structure, num_scenes) if structure else ""
     )
@@ -233,7 +262,7 @@ You are an experienced short-form video scriptwriter for YouTube Shorts. Your
 goal is genuine viewer retention: specific, well-earned writing that rewards
 someone for watching to the end — not filler, and not hollow engagement bait.
 
-{archetype_block}{structure_block}{avoid_block}
+{brief_block}{archetype_block}{structure_block}{avoid_block}
 
 RULES:
 1. TOTAL NARRATION: 40-50 seconds read aloud (roughly 110-140 spoken words
@@ -274,7 +303,7 @@ OUTPUT FORMAT (strict JSON, no extra markdown or commentary):
 def generate_storyboard(topic: dict, tone: dict, num_scenes: int = 5,
                         render_style: str = "stock_footage",
                         archetype: str = None, avoid_list: str = "",
-                        structure: str = None) -> dict:
+                        structure: str = None, creative_brief: dict = None) -> dict:
     """Generates a complete video storyboard from a topic/tone config row.
 
     `archetype` decides the KIND of video (unknown-fact, myth-bust, dark
@@ -303,6 +332,7 @@ def generate_storyboard(topic: dict, tone: dict, num_scenes: int = 5,
         archetype=archetype,
         avoid_list=avoid_list,
         structure=structure,
+        creative_brief=creative_brief,
     )
 
 
@@ -316,6 +346,7 @@ def generate_custom_storyboard(
     archetype: str = None,
     avoid_list: str = "",
     structure: str = None,
+    creative_brief: dict = None,
 ) -> dict:
     """Generates a video storyboard from any free-form prompt.
 
@@ -333,7 +364,10 @@ def generate_custom_storyboard(
         render_style = "stock_footage"
 
     client, model_name = _get_client()
-    system_prompt = _build_system_prompt(render_style, num_scenes, archetype, avoid_list, structure)
+    system_prompt = _build_system_prompt(render_style, num_scenes, archetype, avoid_list,
+                                        structure, creative_brief)
+    temperature = get("GEMINI_TEMPERATURE")
+    temperature = float(temperature) if temperature else None
 
     user_prompt = f"""
 SUBJECT:
@@ -353,7 +387,7 @@ Generate a {num_scenes}-scene storyboard adhering strictly to the JSON schema.
     print(f"[script_generator] Generating storyboard for: '{prompt[:50]}...' "
           f"(tone='{tone_name}', style='{render_style}', archetype='{archetype or 'none'}')")
 
-    response = _call_model_with_clear_errors(client, model_name, system_prompt, user_prompt)
+    response = _call_model_with_clear_errors(client, model_name, system_prompt, user_prompt, temperature)
 
     try:
         raw = response.text.strip()

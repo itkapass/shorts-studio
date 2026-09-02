@@ -65,6 +65,9 @@ from engine import quality_gates
 from engine import alerts
 from engine import archetypes as arch
 from engine import narrative
+from engine import personas as personas_mod
+from engine import topic_synthesizer
+from engine import brief as brief_mod
 from engine import channels as channels_mod
 from engine.styles import is_multi_voice
 from engine.voice_engine import generate_multi_voice
@@ -131,14 +134,39 @@ def run_generation_pipeline():
     # and had to be deleted by hand.
     _expire_stale_render_jobs(db)
 
+    # Top up any persona's topic pool that has run low, BEFORE loading topics
+    # for this run, so newly synthesized ones are immediately eligible. Only
+    # personas with a real enabled channel behind them get topics invented —
+    # no point generating videos for a domain nobody publishes to.
+    try:
+        topic_synthesizer.ensure_all_active_persona_pools(db)
+    except Exception as e:
+        print(f"[orchestrator] \u26a0 Persona topic pool check failed (continuing anyway): {e}")
+
     topics = db.table("topics").select("*").eq("is_active", True).execute().data
     tones = db.table("tones").select("*").eq("is_active", True).execute().data
 
+    # These two are the quietest failure in the whole system: with nothing
+    # active, generation completes "successfully" having produced nothing, and
+    # the only trace is one line in a log nobody reads. It has to alert.
     if not topics:
-        print("[orchestrator] \u26a0 No active topics found. Add topics in the Admin Panel.")
+        alerts.alert(
+            "No videos generated — every topic is turned off",
+            "The daily run found zero ACTIVE topics, so it produced nothing.\n\n"
+            "Fix: open your dashboard -> Topic Studio and switch at least one topic "
+            "back on. The next scheduled run will pick it up, or run 'Generate Videos' "
+            "from the Actions tab to go now.",
+            severity="critical",
+        )
         return
     if not tones:
-        print("[orchestrator] \u26a0 No active tones found. Add tones in the Admin Panel.")
+        alerts.alert(
+            "No videos generated — every tone is turned off",
+            "The daily run found zero ACTIVE tones, so it produced nothing.\n\n"
+            "Fix: open your dashboard -> Topic Studio -> Tones tab and switch at "
+            "least one back on.",
+            severity="critical",
+        )
         return
 
     print(f"[orchestrator] Found {len(topics)} topics, {len(tones)} tones, "
@@ -177,7 +205,17 @@ def run_generation_pipeline():
         from datetime import datetime, timezone
         day = datetime.now(timezone.utc).timetuple().tm_yday
         all_arch = arch.archetype_names()
-        archetype = topic.get("archetype") or all_arch[(day + i) % len(all_arch)]
+        persona_key = topic.get("persona_key")
+        persona = personas_mod.get_persona(persona_key) if persona_key else None
+
+        # A persona-tagged topic rotates through ONLY that persona's preferred
+        # formats — a comedy-persona topic must never come out as a myth-busting
+        # explainer. Topics with no persona keep the original full rotation.
+        if persona and persona.get("preferred_archetypes"):
+            pool = persona["preferred_archetypes"]
+            archetype = topic.get("archetype") or pool[(day + i) % len(pool)]
+        else:
+            archetype = topic.get("archetype") or all_arch[(day + i) % len(all_arch)]
         allowed, block_reason = arch.is_combination_allowed(
             f"{topic.get('name','')} {topic.get('description','')}", archetype
         )
@@ -190,7 +228,11 @@ def run_generation_pipeline():
         # row is exactly what makes a channel look automated.
         structure = topic.get("structure") or narrative.pick_structure(archetype, day + i)
 
-        render_style = topic.get("render_style") or arch.suggest_style(archetype, default_style)
+        render_style = (
+            topic.get("render_style")
+            or (persona.get("preferred_render_style") if persona else None)
+            or arch.suggest_style(archetype, default_style)
+        )
         if render_style not in available_styles():
             render_style = default_style
 
@@ -200,9 +242,16 @@ def run_generation_pipeline():
 
         attempted += 1
         try:
+            # STAGE 1: decide what this video should BE. One extra model call,
+            # free on the current tier, and the single biggest quality lever
+            # available — it stops the writer defaulting to the obvious video.
+            creative_brief = brief_mod.generate_brief(topic, archetype, structure, persona_key=persona_key)
+
+            # STAGE 2: write it.
             storyboard = generate_storyboard(
                 topic, tone, num_scenes=5, render_style=render_style,
                 archetype=archetype, avoid_list=avoid_list, structure=structure,
+                creative_brief=creative_brief,
             )
 
             # Reject repeats BEFORE rendering. Checking after would waste the
@@ -236,6 +285,7 @@ def run_generation_pipeline():
                 voice_profile=settings.get("voice_profile", "documentary_male"),
                 branding=branding,
                 render_style=render_style,
+                persona_key=persona_key,
             )
 
             gates = result.get("quality", {})
@@ -249,7 +299,8 @@ def run_generation_pipeline():
 
             _save_and_finalize(db, result, job_id, topic.get("id"), tone.get("id"), render_style,
                                 auto_approve=auto_approve, archetype=archetype,
-                                structure=structure)
+                                structure=structure, creative_brief=creative_brief,
+                                persona_key=persona_key)
 
             # The concept is added to the in-memory ledger immediately so the
             # NEXT video in this same batch cannot duplicate it. It is only
@@ -341,6 +392,7 @@ def _render_pipeline(
     voice_profile: str,
     branding: dict,
     render_style: str,
+    persona_key: str = None,
 ) -> dict:
     """Everything after 'we have a storyboard' — voiceover, timing, visuals,
     captions, audio mix, and final composition. Previously duplicated almost
@@ -380,7 +432,7 @@ def _render_pipeline(
     else:
         scenes_with_clips = scenes_with_times
 
-    caption_style = default_caption_style_for(render_style)
+    caption_style = default_caption_style_for(render_style, persona_key)
     caption_style.words_per_card = 3
     caption_cards = build_caption_cards(voice_result["word_timestamps"], style=caption_style)
     export_srt(caption_cards, os.path.join(job_output_dir, f"{job_id}.srt"))
@@ -430,7 +482,8 @@ def _load_settings(db: Client) -> dict:
 
 
 def _save_and_finalize(db, result, job_id, topic_id, tone_id, render_style, tone_name=None,
-                       auto_approve=False, archetype=None, channel_id=None, structure=None):
+                       auto_approve=False, archetype=None, channel_id=None, structure=None,
+                       creative_brief=None, persona_key=None):
     """Saves the video row, uploads the rendered file to Storage (this used
     to only happen inside a separate GitHub Actions YAML step — see
     engine/storage.py's docstring), and flags likely near-duplicates instead
@@ -472,7 +525,11 @@ def _save_and_finalize(db, result, job_id, topic_id, tone_id, render_style, tone
         "render_style": render_style,
         "archetype": archetype,
         "structure": structure,
-        "category": archetype,
+        "creative_brief": creative_brief or None,
+        "pulse_context": (creative_brief or {}).get("_pulse_used") or None,
+        "persona_key": persona_key,
+        "category": archetype,          # content FORMAT — used by channels.py routing
+        "topic_label": topic.get("category") or None,  # YOUR grouping tag, e.g. "office"
         "channel_id": channel_id,
         "quality_verdict": gates.get("verdict"),
         "status": initial_status,

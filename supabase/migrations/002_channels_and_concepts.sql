@@ -158,3 +158,34 @@ WHERE NOT EXISTS (SELECT 1 FROM settings s WHERE s.key = v.key);
 ALTER TABLE videos ADD COLUMN IF NOT EXISTS structure TEXT;
 ALTER TABLE topics ADD COLUMN IF NOT EXISTS structure TEXT;
 ALTER TABLE concepts ADD COLUMN IF NOT EXISTS structure TEXT;
+
+
+-- ── Creative brief + current-affairs context ────────────────────────────────
+-- The brief is stored so you can see WHY a video was made the way it was:
+-- which angles were considered, which won, and what was deliberately avoided.
+-- When output is weak, that is the difference between guessing and knowing.
+
+ALTER TABLE videos ADD COLUMN IF NOT EXISTS creative_brief JSONB;
+ALTER TABLE videos ADD COLUMN IF NOT EXISTS pulse_context  TEXT[];
+
+
+-- ── Topic label (free-text grouping, separate from the AI content format) ───
+-- "category" on topics/videos already means the AI FORMAT (dark_humour,
+-- informative, etc) and channels.py routes on it — repurposing it would break
+-- multi-channel routing. topic_label is the user's own subject tag ("office",
+-- "school", "science") for filtering the review queue, independent of format.
+
+ALTER TABLE videos ADD COLUMN IF NOT EXISTS topic_label TEXT;
+
+
+-- ── Personas: a channel becomes a DOMAIN, not just an upload address ────────
+-- persona_key references a template in engine/personas.py (code, not a table,
+-- consistent with how archetypes/narrative structures already work — easy to
+-- add new ones without a migration). NULL everywhere means "today's behaviour,
+-- unchanged" — nothing here is required.
+
+ALTER TABLE channels ADD COLUMN IF NOT EXISTS persona_key TEXT;
+ALTER TABLE topics   ADD COLUMN IF NOT EXISTS persona_key TEXT;
+ALTER TABLE videos   ADD COLUMN IF NOT EXISTS persona_key TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_topics_persona ON topics (persona_key) WHERE persona_key IS NOT NULL;

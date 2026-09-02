@@ -31,8 +31,35 @@ const CATEGORIES = [
   { key: 'observational', label: 'Observational' },
 ]
 
+const PERSONAS = [
+  ['', 'None — pick categories manually below'],
+  ['tech_science_explainer', 'Tech, Science & How Things Work'],
+  ['comedy_skits', 'Comedy, Dark Humour & Life Sketches'],
+  ['top10_and_facts', 'Top 10s, Records & Strange True Things'],
+  ['motivation_and_discipline', 'Motivation, Discipline & Wellbeing'],
+]
+
+const PERSONAS_META = {
+  tech_science_explainer: {
+    categories: ['informative', 'myth_busting', 'life_hack'],
+    description: 'Explains one real tech, science, or how-things-work concept per video.',
+  },
+  comedy_skits: {
+    categories: ['dark_humour', 'sarcasm', 'absurd', 'observational', 'relatable'],
+    description: 'Animated character skits about ordinary life — work, relationships, group chats.',
+  },
+  top10_and_facts: {
+    categories: ['informative', 'myth_busting'],
+    description: 'Rankings, records, and strange true facts people actually trade at 3am.',
+  },
+  motivation_and_discipline: {
+    categories: ['informative', 'wholesome', 'life_hack'],
+    description: 'Discipline, training and wellbeing, grounded in a real mechanism, never a flat quote card.',
+  },
+}
+
 const BLANK = {
-  name: '', handle: '', categories: [], publish_mode: 'manual',
+  name: '', handle: '', persona_key: '', categories: [], publish_mode: 'manual',
   env_suffix: '', daily_cap: 5, priority: 100, is_catchall: false,
   is_enabled: true, notes: '',
 }
@@ -142,6 +169,31 @@ export default function ChannelsPage() {
         <div className="modal-backdrop" onClick={() => setDraft(null)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
             <h2>{draft.id ? 'Edit channel' : 'New channel'}</h2>
+
+            <label>Content persona <span className="muted">(optional — picks your channel's whole domain)</span>
+              <select value={draft.persona_key || ''}
+                      onChange={e => {
+                        const key = e.target.value
+                        const preset = PERSONAS_META[key]
+                        setDraft({
+                          ...draft,
+                          persona_key: key,
+                          // Auto-fill categories from the persona's preferred
+                          // formats so the routing "just works" — still
+                          // editable afterwards if you want something narrower.
+                          categories: preset ? preset.categories : draft.categories,
+                        })
+                      }}>
+                {PERSONAS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </label>
+            {draft.persona_key && PERSONAS_META[draft.persona_key] && (
+              <p className="hint">
+                {PERSONAS_META[draft.persona_key].description} The app will keep inventing new,
+                specific topics inside this domain on its own as its topic pool runs low — you
+                do not need to type them in one at a time.
+              </p>
+            )}
 
             <label>Channel name
               <input value={draft.name}

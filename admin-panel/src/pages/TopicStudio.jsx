@@ -189,18 +189,19 @@ export default function TopicStudio() {
 
               {activeTab === 'topics' && (
                 <div className="form-group">
-                  <label className="form-label">Category</label>
-                  <select 
-                    className="form-select"
+                  <label className="form-label">Label <span style={{fontWeight:400,opacity:.6}}>(your own grouping — type anything)</span></label>
+                  <input
+                    type="text"
+                    className="form-input"
                     value={formState.category}
                     onChange={e => setFormState({ ...formState, category: e.target.value })}
-                  >
-                    <option value="tech">Technology / Engineering</option>
-                    <option value="education">Education / Science</option>
-                    <option value="lifestyle">Lifestyle / Advice</option>
-                    <option value="sarcasm">Sarcasm / Comedy</option>
-                    <option value="comedy">Comedy / Skits</option>
-                  </select>
+                    placeholder="e.g. office, school, science, gym"
+                  />
+                  <div className="form-hint">
+                    This does NOT control what kind of video gets made — that is <strong>Content
+                    Format</strong> below. This is purely so you can filter the review queue by
+                    subject, e.g. see every "office" video separately from every "school" video.
+                  </div>
                 </div>
               )}
 
@@ -266,7 +267,7 @@ export default function TopicStudio() {
             </div>
 
             <div className="form-group">
-              <label className="form-label">AI Description / Core Prompt</label>
+              <label className="form-label">What is this topic about? <span style={{fontWeight:400,opacity:.6}}>(optional)</span></label>
               <textarea 
                 className="form-textarea"
                 required
@@ -277,12 +278,22 @@ export default function TopicStudio() {
                 value={formState.description}
                 onChange={e => setFormState({ ...formState, description: e.target.value })}
               />
-              <div className="form-hint">This is passed directly to Google Gemini as the topic context.</div>
+              <div className="form-hint">
+                <strong>You can leave this blank.</strong> Before writing each video the AI now
+                generates its own creative brief — it comes up with five different angles on the
+                topic, picks the strongest, and explicitly rules out the obvious version. It also
+                pulls in what is currently being discussed about the topic, so videos stay timely
+                without you tracking the news.
+                <br /><br />
+                Only fill this in if you want to <em>narrow</em> the topic — e.g. "focus on the
+                physics, not the history". A one-line steer is plenty; long prompts here tend to
+                make videos worse, not better, by locking the AI into one angle.
+              </div>
             </div>
 
             {activeTab === 'topics' && (
               <div className="form-group">
-                <label className="form-label">Custom Admin Context & Hook Rules (Optional)</label>
+                <label className="form-label">Extra rules <span style={{fontWeight:400,opacity:.6}}>(rarely needed)</span></label>
                 <textarea 
                   className="form-textarea"
                   rows={2}
@@ -290,7 +301,11 @@ export default function TopicStudio() {
                   value={formState.custom_context}
                   onChange={e => setFormState({ ...formState, custom_context: e.target.value })}
                 />
-                <div className="form-hint">Extra guardrails and specific analogies you want the AI to include.</div>
+                <div className="form-hint">
+                  Almost always leave this empty. Content safety rules for each format are already
+                  built in and are stricter than anything typed here. Use it only for a genuine
+                  house rule, like "never mention competitor brand names".
+                </div>
               </div>
             )}
 

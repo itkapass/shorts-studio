@@ -59,6 +59,13 @@ function isRecent(iso) {
 export default function VideoQueue() {
   const [videos, setVideos] = useState([])
   const [filter, setFilter] = useState('pending') // 'pending' | 'approved' | 'published' | 'all'
+  // Content-format filter ("Dark Humour", "Unknown Facts"...) and your own
+  // subject label ("office", "school"...). This is what actually answers
+  // "show me science in one filter, comedy in another, office separate from
+  // school" — status alone never could, since every video is just "pending"
+  // regardless of what it's about.
+  const [archetypeFilter, setArchetypeFilter] = useState('all')
+  const [labelFilter, setLabelFilter] = useState('all')
   const [loading, setLoading] = useState(true)
   const [expandedId, setExpandedId] = useState(null)
   const [actionLoading, setActionLoading] = useState({})
@@ -86,6 +93,21 @@ export default function VideoQueue() {
     }
     setLoading(false)
   }
+
+  // Distinct values actually present, so the dropdowns only ever show
+  // categories/labels that exist right now rather than a hardcoded list that
+  // drifts out of sync with what topics were actually made.
+  const availableArchetypes = Array.from(
+    new Set(videos.map(v => v.category).filter(Boolean))
+  ).sort()
+  const availableLabels = Array.from(
+    new Set(videos.map(v => v.topic_label).filter(Boolean))
+  ).sort()
+
+  const visibleVideos = videos.filter(v =>
+    (archetypeFilter === 'all' || v.category === archetypeFilter) &&
+    (labelFilter === 'all' || v.topic_label === labelFilter)
+  )
 
   async function updateStatus(id, newStatus) {
     setActionLoading(prev => ({ ...prev, [id]: true }))
@@ -128,7 +150,10 @@ export default function VideoQueue() {
   }
 
   async function approveAllPending() {
-    const pendingIds = videos.filter(v => v.status === 'pending').map(v => v.id)
+    // Bounded by visibleVideos, not the full list — if you've filtered down
+    // to just "office" videos, Approve All must only touch those, not every
+    // pending video across every category.
+    const pendingIds = visibleVideos.filter(v => v.status === 'pending').map(v => v.id)
     if (!pendingIds.length) return
     if (!confirm(
       `Approve all ${pendingIds.length} pending videos without watching them individually?\n\n` +
@@ -164,9 +189,9 @@ export default function VideoQueue() {
           <p>Review and approve AI-generated video drafts before they publish to YouTube.</p>
         </div>
         <div className="flex gap-2">
-          {filter === 'pending' && videos.length > 0 && (
+          {filter === 'pending' && visibleVideos.length > 0 && (
             <button className="btn btn-success" onClick={approveAllPending}>
-              <Check size={16} /> Approve All ({videos.length})
+              <Check size={16} /> Approve All ({visibleVideos.length})
             </button>
           )}
           <button className="btn btn-ghost" onClick={loadVideos}>
@@ -195,13 +220,53 @@ export default function VideoQueue() {
         ))}
       </div>
 
+      {/* Content Format & Label filters — this is what actually separates
+          "science" from "comedy" from "office" from "school" in the queue.
+          The status tabs above answer "what stage is it at"; these answer
+          "what kind of video is it", which is the filtering that was missing. */}
+      {(availableArchetypes.length > 0 || availableLabels.length > 0) && (
+        <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+          <span className="muted small">Filter by:</span>
+          {availableArchetypes.length > 0 && (
+            <select
+              className="form-select form-select-sm"
+              value={archetypeFilter}
+              onChange={e => setArchetypeFilter(e.target.value)}
+            >
+              <option value="all">All content formats</option>
+              {availableArchetypes.map(a => (
+                <option key={a} value={a}>{a.replace(/_/g, ' ')}</option>
+              ))}
+            </select>
+          )}
+          {availableLabels.length > 0 && (
+            <select
+              className="form-select form-select-sm"
+              value={labelFilter}
+              onChange={e => setLabelFilter(e.target.value)}
+            >
+              <option value="all">All labels</option>
+              {availableLabels.map(l => (
+                <option key={l} value={l}>{l}</option>
+              ))}
+            </select>
+          )}
+          {(archetypeFilter !== 'all' || labelFilter !== 'all') && (
+            <button className="btn btn-sm btn-ghost" onClick={() => { setArchetypeFilter('all'); setLabelFilter('all') }}>
+              Clear filters
+            </button>
+          )}
+          <span className="muted small">{visibleVideos.length} of {videos.length} shown</span>
+        </div>
+      )}
+
       {/* Video List */}
       {loading ? (
         <div className="loading-screen">
           <div className="spinner" />
           <span>Loading queue...</span>
         </div>
-      ) : videos.length === 0 ? (
+      ) : visibleVideos.length === 0 ? (
         <div className="card empty-state">
           <Film size={48} opacity={0.3} />
           <h3>No videos in this queue</h3>
@@ -213,7 +278,7 @@ export default function VideoQueue() {
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-          {videos.map(video => {
+          {visibleVideos.map(video => {
             const isExpanded = expandedId === video.id
             let parsedStoryboard = null
             try {

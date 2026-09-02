@@ -12,7 +12,8 @@ export default function SettingsPage() {
     publish_per_run: '1',
     max_videos_daily: '5',
     auto_approve: 'false',
-    default_render_style: 'stock_footage'
+    default_render_style: 'stock_footage',
+    gemini_temperature: '0.9'
   })
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -140,6 +141,30 @@ export default function SettingsPage() {
             </select>
             <div className="form-hint">
               Used for any topic that doesn't set its own style in Topic Studio.
+            </div>
+
+            <label className="form-label" style={{ marginTop: 16 }}>
+              AI Creativity (temperature) — {settings.gemini_temperature}
+            </label>
+            <input
+              type="range" min="0.2" max="1.4" step="0.1"
+              value={settings.gemini_temperature}
+              onChange={e => setSettings({ ...settings, gemini_temperature: e.target.value })}
+              style={{ width: '100%' }}
+            />
+            <div className="form-hint">
+              <strong>This is a real AI-engineering concept, not just a slider.</strong> It
+              controls how often Gemini picks a less-obvious next word instead of the safest one.
+              <br /><br />
+              <strong>Low (0.2–0.5):</strong> predictable, same-ish phrasing every time. Good for
+              factual accuracy, bad for jokes — the safest word is rarely the funny one.
+              <br />
+              <strong>Default (0.9):</strong> the sweet spot for short-form writing — varied
+              without breaking down.
+              <br />
+              <strong>High (1.2+):</strong> more surprising, but risks sentences that technically
+              parse yet read oddly. Try generating the same topic at 0.5 and then at 1.2 and
+              compare — that's the fastest way to actually understand what this number does.
             </div>
           </div>
         </div>

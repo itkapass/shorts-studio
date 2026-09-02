@@ -53,6 +53,13 @@ class CaptionStyle:
     # style, which already has a moving face to look at.
     highlight_active_word: bool = True
 
+    # Set True for persona-driven content that wants an emphasised word to
+    # render visibly larger (motivation/discipline persona). Off by default
+    # because a size-jumping word fights for attention in styles where the
+    # animated character is already the thing carrying delivery.
+    emphasis_pop: bool = False
+    emphasis_scale: float = 1.35
+
 
 @dataclass
 class CaptionCard:
@@ -78,6 +85,34 @@ class CaptionCard:
             if ws <= t < we:
                 return i
         return -1
+
+    def emphasis_mask(self) -> list:
+        """Which words should render bigger — a size pop, not just colour.
+
+        Built for the motivation/discipline persona, where flat text cards
+        were flagged as the weakest possible way to deliver a line that is
+        supposed to land with real force. A word in ALL CAPS or ending in an
+        exclamation mark is a writer's own signal for "hit this one harder";
+        rendering it larger is the visual equivalent of a speaker raising
+        their voice on cue.
+
+        Deliberately restrained: a card where every word pops means nothing
+        pops. At most one emphasised word per card keeps it meaning something.
+        """
+        mask = [False] * len(self.words)
+        best_idx, best_score = -1, 0
+        for i, w in enumerate(self.words):
+            bare = w.strip(".,!?;:\"'")
+            score = 0
+            if bare.isupper() and len(bare) > 1:
+                score += 2
+            if w.endswith("!"):
+                score += 1
+            if score > best_score:
+                best_score, best_idx = score, i
+        if best_idx >= 0:
+            mask[best_idx] = True
+        return mask
 
 
 _BREAK_CHARS = ".!?"

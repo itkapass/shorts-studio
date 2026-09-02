@@ -97,8 +97,15 @@ def credentials_for(channel: dict) -> dict | None:
     return {"client_id": cid, "client_secret": secret, "refresh_token": token}
 
 
-def route(category: str, channels: list = None, db=None) -> dict | None:
-    """Picks the channel a video of `category` should publish to.
+def route(category: str, channels: list = None, db=None, persona_key: str = None) -> dict | None:
+    """Picks the channel a video should publish to.
+
+    Tries persona first when the video has one: a tech-explainer channel and a
+    top-10-facts channel can both legitimately accept the "informative"
+    archetype, and archetype alone cannot tell them apart — only the persona
+    can. Falls back to archetype-only matching for videos with no persona,
+    which is every video from before this existed, so nothing already set up
+    breaks.
 
     Returns None when nothing accepts it — the caller should then fall back to
     manual export. Silently posting an unmatched video to whichever channel
@@ -107,6 +114,11 @@ def route(category: str, channels: list = None, db=None) -> dict | None:
     channels = channels if channels is not None else load_channels(db=db)
     if not channels:
         return None
+
+    if persona_key:
+        persona_match = [c for c in channels if c.get("persona_key") == persona_key]
+        if persona_match:
+            return persona_match[0]
 
     for ch in channels:
         accepted = ch.get("categories") or []

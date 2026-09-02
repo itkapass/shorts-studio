@@ -186,10 +186,17 @@ def compose_video(
     return output_path
 
 
-def default_caption_style_for(render_style: str) -> CaptionStyle:
+def default_caption_style_for(render_style: str, persona_key: str = None) -> CaptionStyle:
     """Each render style gets caption defaults that actually match its look.
     Still just a CaptionStyle — callers can override any field before passing
-    it to compose_video()."""
+    it to compose_video().
+
+    persona_key is checked first for a persona-specific override. Right now
+    that means exactly one thing: the motivation/discipline persona turns on
+    word-size emphasis, because that persona's whole brief is "a flat text
+    card is the failure mode here" — the emphasised word is the visual answer
+    to that, not an across-the-board feature everything gets by default.
+    """
     if render_style == "whiteboard_sketch":
         return CaptionStyle(
             font_file="assets/fonts/Kalam-Bold.ttf",
@@ -210,7 +217,11 @@ def default_caption_style_for(render_style: str) -> CaptionStyle:
             stroke_width=2,
             bg_box=False,
         )
-    return CaptionStyle()  # stock_footage default (white-on-black-box Montserrat)
+
+    style = CaptionStyle()  # stock_footage default (white-on-black-box Montserrat)
+    if persona_key == "motivation_and_discipline":
+        style.emphasis_pop = True
+    return style
 
 
 # ─── Caption Overlay Builder (style-agnostic) ──────────────────────────────────
@@ -248,7 +259,8 @@ def _build_caption_clips(
         duration = max(card.duration, 0.1)
 
         if not style.highlight_active_word or not card.word_times:
-            img = _render_text_card(card.words, -1, style, font_path)
+            emphasis = card.emphasis_mask() if style.emphasis_pop else None
+            img = _render_text_card(card.words, -1, style, font_path, emphasis)
             clips.append(
                 ImageClip(img)
                 .set_duration(duration)
@@ -280,7 +292,8 @@ def _build_caption_clips(
             filled.insert(0, (card.start_time, filled[0][0], -1))
 
         for si, (s, e, wi) in enumerate(filled):
-            img = _render_text_card(card.words, wi, style, font_path)
+            emphasis = card.emphasis_mask() if style.emphasis_pop else None
+            img = _render_text_card(card.words, wi, style, font_path, emphasis)
             clip = (
                 ImageClip(img)
                 .set_duration(max(e - s, 0.02))
@@ -312,51 +325,69 @@ def _load_font(font_path: str, font_size: int):
     return font
 
 
-def _render_text_card(words, active_index: int, style: CaptionStyle, font_path: str) -> np.ndarray:
+def _render_text_card(words, active_index: int, style: CaptionStyle, font_path: str,
+                       emphasis_mask: list = None) -> np.ndarray:
     """Renders one caption card, colouring `active_index` in the highlight
-    colour and everything else in the base colour.
+    colour and optionally rendering one word larger per `emphasis_mask`.
 
     Words are measured and drawn individually rather than as one string,
     because PIL can only apply a single fill per draw.text() call. Measuring
     each word separately is also what lets the highlight sit exactly under the
-    right word instead of being approximated from a character offset.
+    right word instead of being approximated from a character offset, and it
+    is what makes a size-varying emphasised word possible at all — a single
+    draw.text() call has exactly one font size for the whole string.
+
+    Emphasis vertical placement is per-word CENTRED within the card's row
+    height rather than baseline-matched against the other words. True
+    baseline alignment across two different font sizes needs font ascent
+    metrics PIL does not expose cleanly across platforms; centring is a
+    simpler calculation that still reads correctly as "this word is bigger",
+    which is the entire visual point.
     """
     if isinstance(words, str):
         words = words.split()
     if not words:
         return np.zeros((1, 1, 4), dtype=np.uint8)
 
+    emphasis_mask = emphasis_mask or [False] * len(words)
     font_size = style.font_size
+    emphasis_size = int(font_size * getattr(style, "emphasis_scale", 1.35))
     max_w = int(VIDEO_WIDTH * style.max_width_ratio)
     padding = style.bg_padding
 
-    def load(size):
-        try:
-            return _load_font(font_path, size) if font_path else ImageFont.load_default()
-        except Exception:
-            return ImageFont.load_default()
+    font_cache = {}
 
-    font = load(font_size)
+    def load(size):
+        if size not in font_cache:
+            try:
+                font_cache[size] = _load_font(font_path, size) if font_path else ImageFont.load_default()
+            except Exception:
+                font_cache[size] = ImageFont.load_default()
+        return font_cache[size]
+
     measure = ImageDraw.Draw(Image.new("RGBA", (8, 8)))
 
-    def layout(f):
-        space = measure.textlength(" ", font=f)
-        widths = [measure.textlength(w, font=f) for w in words]
+    def word_font(i):
+        return load(emphasis_size) if emphasis_mask[i] else load(font_size)
+
+    def layout():
+        space = measure.textlength(" ", font=load(font_size))
+        widths = [measure.textlength(w, font=word_font(i)) for i, w in enumerate(words)]
         return widths, space, sum(widths) + space * (len(words) - 1)
 
-    widths, space_w, total_w = layout(font)
-    # Shrink to fit rather than overflowing off the side of the frame.
-    while total_w > max_w and font_size > 30:
+    widths, space_w, total_w = layout()
+    # Shrink to fit rather than overflowing off the side of the frame. Shrinks
+    # both sizes together so the emphasis word stays proportionally bigger.
+    while total_w > max_w and font_size > 24:
         font_size -= 4
-        font = load(font_size)
-        widths, space_w, total_w = layout(font)
+        emphasis_size = int(font_size * getattr(style, "emphasis_scale", 1.35))
+        widths, space_w, total_w = layout()
 
-    bbox = measure.textbbox((0, 0), " ".join(words), font=font)
-    text_h = bbox[3] - bbox[1]
-    ascent_pad = bbox[1]
+    word_boxes = [measure.textbbox((0, 0), w, font=word_font(i)) for i, w in enumerate(words)]
+    row_h = max(b[3] - b[1] for b in word_boxes)
 
     img_w = int(total_w + padding * 2)
-    img_h = int(text_h + padding * 2)
+    img_h = int(row_h + padding * 2)
     img = Image.new("RGBA", (max(img_w, 1), max(img_h, 1)), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
@@ -368,15 +399,20 @@ def _render_text_card(words, active_index: int, style: CaptionStyle, font_path: 
     stroke_color = (*_hex_to_rgb(style.stroke_color), 255)
 
     x = float(padding)
-    y = float(padding - ascent_pad)
     for i, word in enumerate(words):
+        f = word_font(i)
+        bbox = word_boxes[i]
+        word_h = bbox[3] - bbox[1]
+        y = padding + (row_h - word_h) / 2.0 - bbox[1]
+
         if style.stroke_width > 0:
             s = style.stroke_width
+
             for dx in range(-s, s + 1):
                 for dy in range(-s, s + 1):
                     if dx or dy:
-                        draw.text((x + dx, y + dy), word, font=font, fill=stroke_color)
-        draw.text((x, y), word, font=font, fill=hi_color if i == active_index else base_color)
+                        draw.text((x + dx, y + dy), word, font=f, fill=stroke_color)
+        draw.text((x, y), word, font=f, fill=hi_color if i == active_index else base_color)
         x += widths[i] + space_w
 
     return np.array(img)

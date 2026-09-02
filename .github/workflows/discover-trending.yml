@@ -1,0 +1,47 @@
+name: Discover Trending Topics
+
+# Manual-trigger ONLY, deliberately — no schedule. Adding a topic is not
+# reversible the way rejecting a video is: a bad video costs one review, a
+# bad topic keeps generating bad videos every day until someone notices.
+# Run this by hand a few times, watch what gets added and how those videos
+# turn out, and only then consider adding a schedule (see docs/09).
+
+on:
+  workflow_dispatch:
+    inputs:
+      auto_add:
+        description: "Actually add topics? (unchecked = preview only, adds nothing)"
+        type: boolean
+        default: false
+      limit:
+        description: "Max topics to add"
+        type: string
+        default: "2"
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Discover trending topics
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ "${{ inputs.auto_add }}" = "true" ]; then
+            python -m engine.trending --auto-add --limit ${{ inputs.limit }}
+          else
+            python -m engine.trending
+          fi

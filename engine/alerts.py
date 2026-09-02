@@ -199,3 +199,53 @@ def daily_digest(summary: dict):
         f"Storage used: {summary.get('storage_mb', 0):.0f} MB",
     ]
     return alert("Daily digest", "\n".join(lines), severity="info", force=True)
+
+
+# ─── Test harness ────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import argparse
+
+    p = argparse.ArgumentParser(description="Test your alert setup")
+    p.add_argument("--test", action="store_true", help="Send a test alert")
+    args = p.parse_args()
+
+    if not args.test:
+        p.print_help()
+        raise SystemExit(0)
+
+    print("\nChecking what is configured...")
+    tg = _telegram_configured()
+    em = _email_configured()
+    print(f"  Telegram: {'configured' if tg else 'NOT configured'}")
+    print(f"  Email:    {'configured' if em else 'NOT configured'}")
+
+    if not (tg or em):
+        print("\n  Neither is set up, so nothing can be sent.")
+        print("  Telegram takes 5 minutes and is free: see docs/08.")
+        print("  You need TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.\n")
+        raise SystemExit(1)
+
+    print("\nSending a test alert...")
+    result = alert(
+        "Test alert",
+        "If you are reading this, your alerts are working.\n\n"
+        "You will get messages like this when something needs attention: "
+        "the YouTube login expiring, storage filling up, a generation run "
+        "failing, or every topic being switched off.",
+        severity="warn",
+    )
+
+    sent = [k for k, v in result.items() if v and k != "logged"]
+    if sent:
+        print(f"\n  Sent via: {', '.join(sent)}")
+        print("  Check your phone.\n")
+        raise SystemExit(0)
+
+    print("\n  Sending FAILED. Common causes:")
+    print("    - The bot token is wrong, or has a space at the end")
+    print("    - You never sent your bot a message (Telegram blocks bots")
+    print("      from messaging you first — open the chat and press Start)")
+    print("    - The chat ID is wrong. Get it from:")
+    print("      https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates\n")
+    raise SystemExit(1)
