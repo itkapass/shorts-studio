@@ -37,6 +37,9 @@ const PERSONAS = [
   ['comedy_skits', 'Comedy, Dark Humour & Life Sketches'],
   ['top10_and_facts', 'Top 10s, Records & Strange True Things'],
   ['motivation_and_discipline', 'Motivation, Discipline & Wellbeing'],
+  ['what_if_physics', 'What If — Real Science, Absurd Questions'],
+  ['awareness_comedy', 'Awareness Through Comedy'],
+  ['everyday_origins', 'Why Ordinary Things Are The Way They Are'],
 ]
 
 const PERSONAS_META = {
@@ -55,6 +58,18 @@ const PERSONAS_META = {
   motivation_and_discipline: {
     categories: ['informative', 'wholesome', 'life_hack'],
     description: 'Discipline, training and wellbeing, grounded in a real mechanism, never a flat quote card.',
+  },
+  what_if_physics: {
+    categories: ['informative', 'absurd', 'myth_busting'],
+    description: 'Absurd hypotheticals answered with real science — the question hooks, the true answer pays off.',
+  },
+  awareness_comedy: {
+    categories: ['sarcasm', 'absurd', 'observational', 'myth_busting'],
+    description: 'Climate, population and resources landed through comedy instead of lecturing.',
+  },
+  everyday_origins: {
+    categories: ['informative', 'myth_busting', 'life_hack'],
+    description: 'Why ordinary objects are the way they are. Effectively inexhaustible.',
   },
 }
 

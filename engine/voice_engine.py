@@ -128,16 +128,35 @@ async def _edge_tts_with_timings(text: str, voice_id: str, output_path: str):
     return words
 
 
-def _try_edge_tts(text, voice_id, output_path):
-    try:
-        words = asyncio.run(_edge_tts_with_timings(text, voice_id, output_path))
-        if not words or os.path.getsize(output_path) < 1024:
-            raise RuntimeError("edge-tts returned no audio or no word boundaries")
-        print(f"[voice_engine] ✓ edge-tts: {len(words)} words with exact timings")
-        return words
-    except Exception as e:
-        print(f"[voice_engine] ⚠ edge-tts unavailable ({e}). Trying offline fallback...")
-        return None
+def _try_edge_tts(text, voice_id, output_path, attempts=3):
+    """Tries edge-tts, retrying transient failures before giving up.
+
+    Retries matter specifically in GitHub Actions: edge-tts is an unofficial
+    wrapper around Microsoft's read-aloud service, and Microsoft rate-limits
+    datacenter IP ranges far more aggressively than home connections. A run
+    that fails on the first attempt very often succeeds on the second a few
+    seconds later. Without retries a single transient block took down the
+    entire render, which is exactly what happened in the failing run.
+    """
+    import time
+
+    for attempt in range(1, attempts + 1):
+        try:
+            words = asyncio.run(_edge_tts_with_timings(text, voice_id, output_path))
+            if not words or os.path.getsize(output_path) < 1024:
+                raise RuntimeError("edge-tts returned no audio or no word boundaries")
+            print(f"[voice_engine] ✓ edge-tts: {len(words)} words with exact timings")
+            return words
+        except Exception as e:
+            if attempt < attempts:
+                wait = 3 * attempt
+                print(f"[voice_engine] ⚠ edge-tts attempt {attempt}/{attempts} failed ({e}). "
+                      f"Retrying in {wait}s...")
+                time.sleep(wait)
+            else:
+                print(f"[voice_engine] ⚠ edge-tts unavailable after {attempts} attempts ({e}). "
+                      f"Trying offline fallback...")
+    return None
 
 
 # ─── Engine 2: Piper, fully offline ──────────────────────────────────────────

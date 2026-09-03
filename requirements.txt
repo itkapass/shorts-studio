@@ -11,6 +11,13 @@ google-genai>=1.0.0
 # ── Text-to-Speech ─────────────────────────────────────────────────
 edge-tts>=7.0.0
 
+# Last-resort TTS fallback. This was MISSING, which meant the "fallback chain"
+# in voice_engine.py had nothing to fall back TO: edge-tts would fail in
+# GitHub Actions (Microsoft rate-limits datacenter IPs), Piper isn't installed
+# by default, and gTTS wasn't installed either — so the whole render died with
+# "Every TTS engine failed". A fallback that isn't installed is not a fallback.
+gTTS>=2.5.0
+
 # ── Word-Level Timestamps (offline, no API cost) ───────────────────
 # openai-whisper  # REMOVED — voice_engine.py now takes exact word timings
 #                  # from edge-tts WordBoundary events instead of transcribing

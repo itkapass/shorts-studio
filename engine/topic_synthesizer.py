@@ -31,9 +31,11 @@ few days per persona, not one extra call per video.
 """
 import json
 import re
+from datetime import datetime, timezone
 
 from engine import personas as personas_mod
 from engine import concept_memory as cm
+from engine import lenses as lenses_mod
 
 MIN_POOL_SIZE = 5
 SYNTHESIZE_BATCH = 6
@@ -67,7 +69,8 @@ def _extract_json_array(text: str) -> list:
     return json.loads(cleaned[start:end + 1])
 
 
-def synthesize_topics(persona_key: str, n: int, existing_names: set, ledger: list) -> list:
+def synthesize_topics(persona_key: str, n: int, existing_names: set, ledger: list,
+                      rotation_index: int = 0) -> list:
     """Asks Gemini for `n` new topic ideas inside a persona's domain.
 
     Returns [] on any failure — the caller falls back to the persona's static
@@ -83,6 +86,11 @@ def synthesize_topics(persona_key: str, n: int, existing_names: set, ledger: lis
     avoid = sorted(existing_names)[:80] + [r.get("title", "") for r in ledger[:40]]
     avoid_text = "\n".join(f"- {a}" for a in avoid if a) or "(nothing yet)"
 
+    # Assign each requested topic a DIFFERENT kind of question. Without this,
+    # every batch converges on "how does X work" — see engine/lenses.py.
+    chosen_lenses = lenses_mod.pick_lenses(persona_key, n, rotation_index)
+    lens_text = lenses_mod.prompt_block(chosen_lenses)
+
     user = f"""DOMAIN: {persona['label']}
 {persona['description']}
 
@@ -92,7 +100,9 @@ EXAMPLES OF THE DOMAIN'S SHAPE (do not repeat these, invent NEW ones like them):
 ALREADY COVERED — do not repeat or closely rephrase any of these:
 {avoid_text}
 
-Invent {n} new topics."""
+{lens_text}
+
+Invent exactly {n} new topics, one per lens, in order."""
 
     try:
         client, model_name = _get_client()
@@ -145,7 +155,10 @@ def ensure_persona_topic_pool(persona_key: str, db, min_pool: int = MIN_POOL_SIZ
             t["name"].strip().lower()
             for t in (db.table("topics").select("name").execute().data or [])
         }
-        ideas = synthesize_topics(persona_key, needed, all_topic_names, ledger)
+        # Rotate the lens starting point by day so consecutive days don't
+        # always lead with the same kind of question.
+        rotation = datetime.now(timezone.utc).timetuple().tm_yday
+        ideas = synthesize_topics(persona_key, needed, all_topic_names, ledger, rotation)
 
         # Fall back to unused seed topics if the model call failed or returned
         # too few — the persona must never go dry just because one API call

@@ -189,3 +189,24 @@ ALTER TABLE topics   ADD COLUMN IF NOT EXISTS persona_key TEXT;
 ALTER TABLE videos   ADD COLUMN IF NOT EXISTS persona_key TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_topics_persona ON topics (persona_key) WHERE persona_key IS NOT NULL;
+
+
+-- ── Allow deleting a topic that already has videos ──────────────────────────
+-- videos.topic_id referenced topics(id) with no ON DELETE rule, so Postgres
+-- defaults to NO ACTION and refuses the delete:
+--   'update or delete on table "topics" violates foreign key constraint
+--    "videos_topic_id_fkey" on table "videos"'
+--
+-- ON DELETE SET NULL is the right rule here rather than CASCADE. CASCADE
+-- would delete every video ever made from that topic — including published
+-- ones, taking their YouTube IDs and history with them. Setting the reference
+-- to NULL keeps the videos and their history intact; they simply stop
+-- pointing at a topic that no longer exists.
+
+ALTER TABLE videos DROP CONSTRAINT IF EXISTS videos_topic_id_fkey;
+ALTER TABLE videos ADD  CONSTRAINT videos_topic_id_fkey
+    FOREIGN KEY (topic_id) REFERENCES topics(id) ON DELETE SET NULL;
+
+ALTER TABLE videos DROP CONSTRAINT IF EXISTS videos_tone_id_fkey;
+ALTER TABLE videos ADD  CONSTRAINT videos_tone_id_fkey
+    FOREIGN KEY (tone_id) REFERENCES tones(id) ON DELETE SET NULL;

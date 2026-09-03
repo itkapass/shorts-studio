@@ -202,7 +202,13 @@ def run_generation_pipeline():
         # Dark humour, sarcasm, absurd and observational were unreachable —
         # not rare, impossible. Adding the day-of-year advances the starting
         # point every day, so the full set gets used over time.
-        from datetime import datetime, timezone
+        #
+        # NOTE: datetime is imported at module level ONLY. Re-importing it
+        # inside this function made Python treat `datetime` as a local name
+        # for the WHOLE function, so the very first line of the function
+        # (which prints the start time) crashed with UnboundLocalError before
+        # execution ever reached the import. That took down every single
+        # generation run. Never shadow a module-level import inside a function.
         day = datetime.now(timezone.utc).timetuple().tm_yday
         all_arch = arch.archetype_names()
         persona_key = topic.get("persona_key")
@@ -546,8 +552,13 @@ def _expire_stale_render_jobs(db, max_age_hours: int = 3):
 
     3 hours is well beyond the longest legitimate render (about 40 minutes for
     a full batch), so anything older is genuinely stuck rather than slow.
+
+    timedelta is imported here because it is not needed at module level;
+    datetime and timezone are NOT re-imported — doing so would shadow the
+    module-level names and break this function the same way it broke
+    run_generation_pipeline.
     """
-    from datetime import datetime, timezone, timedelta
+    from datetime import timedelta
     try:
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).isoformat()
         stale = (

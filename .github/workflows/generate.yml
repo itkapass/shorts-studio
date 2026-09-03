@@ -130,3 +130,14 @@ jobs:
           else
             echo "No new concepts to record."
           fi
+
+      # Fires even if Python crashed on its very first line. The in-Python
+      # alerting in engine/alerts.py cannot report a crash that happens before
+      # engine/alerts.py is ever reached — this can.
+      - name: Alert on failure
+        if: failure()
+        uses: ./.github/actions/notify-failure
+        with:
+          workflow_name: "Generate Video Drafts"
+          telegram_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          telegram_chat: ${{ secrets.TELEGRAM_CHAT_ID }}

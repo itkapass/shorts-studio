@@ -40,7 +40,6 @@ def upload_all_pending(db=None):
     Rarely needed now that the orchestrator uploads inline, but it is the
     recovery path if a run is interrupted between rendering and uploading.
     """
-    import os
     from engine.config import get
     from supabase import create_client
 

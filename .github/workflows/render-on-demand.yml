@@ -97,3 +97,14 @@ jobs:
           OUTPUT_DIR:           /tmp/shorts_output
         run: |
           python -m engine.storage --job-id "${{ inputs.job_id }}" || true
+
+      # Fires even if Python crashed on its very first line. The in-Python
+      # alerting in engine/alerts.py cannot report a crash that happens before
+      # engine/alerts.py is ever reached — this can.
+      - name: Alert on failure
+        if: failure()
+        uses: ./.github/actions/notify-failure
+        with:
+          workflow_name: "Render On-Demand Video"
+          telegram_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          telegram_chat: ${{ secrets.TELEGRAM_CHAT_ID }}

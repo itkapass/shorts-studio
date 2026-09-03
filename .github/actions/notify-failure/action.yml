@@ -1,0 +1,52 @@
+name: Notify Failure
+description: >
+  Sends a Telegram and/or email alert when a workflow fails. Runs at the
+  workflow level, NOT inside Python, so it still fires when Python crashes
+  before any of its own alerting code can run — which is exactly what happened
+  when a variable-shadowing bug killed the pipeline on its very first line and
+  no alert was ever sent.
+
+inputs:
+  workflow_name:
+    description: Which workflow failed
+    required: true
+  telegram_token:
+    description: TELEGRAM_BOT_TOKEN secret
+    required: false
+    default: ""
+  telegram_chat:
+    description: TELEGRAM_CHAT_ID secret
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Send Telegram alert
+      shell: bash
+      env:
+        TG_TOKEN: ${{ inputs.telegram_token }}
+        TG_CHAT: ${{ inputs.telegram_chat }}
+        WF: ${{ inputs.workflow_name }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHAT" ]; then
+          echo "Telegram not configured — skipping alert."
+          echo "To get these alerts on your phone, see docs/08."
+          exit 0
+        fi
+
+        # --data-urlencode handles newlines and special characters properly.
+        # Building the string manually and interpolating it into a URL breaks
+        # the moment an error message contains an ampersand or a quote.
+        curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+          --data-urlencode "chat_id=${TG_CHAT}" \
+          --data-urlencode "text=🚨 ${WF} FAILED
+
+        The workflow stopped with an error, so nothing was produced this run.
+
+        Open the log to see why:
+        ${RUN_URL}
+
+        If this keeps happening, the log's last few lines usually name the exact
+        problem." > /dev/null && echo "Telegram alert sent." || echo "Telegram send failed."
