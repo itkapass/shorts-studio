@@ -123,10 +123,17 @@ Invent exactly {n} new topics, one per lens, in order."""
 def ensure_persona_topic_pool(persona_key: str, db, min_pool: int = MIN_POOL_SIZE) -> int:
     """Tops up a persona's unused topic pool if it has run low.
 
-    "Unused" means active and not yet reflected in the concept ledger — a
-    topic that already produced a published video is not pool depth, it is
-    history. Returns how many new topics were added (0 is a normal result,
-    not a failure — it just means the pool was already full enough).
+    "Unused" means an ACTIVE topic that has never produced a video row yet.
+
+    This deliberately does NOT use the concept ledger to decide what is spent.
+    The ledger only records on publish, so a topic that had already generated
+    three unreviewed videos still counted as "unused" — which is precisely how
+    the same subject got made over and over. Counting actual video rows means
+    a topic is spent the moment it produces anything, so each new video
+    reaches for a genuinely new subject.
+
+    Returns how many new topics were added (0 is normal, not a failure — it
+    just means the pool was already deep enough).
     """
     persona = personas_mod.get_persona(persona_key)
     if not persona:
@@ -134,35 +141,39 @@ def ensure_persona_topic_pool(persona_key: str, db, min_pool: int = MIN_POOL_SIZ
 
     try:
         active = (
-            db.table("topics").select("name")
+            db.table("topics").select("id, name")
             .eq("persona_key", persona_key).eq("is_active", True)
             .execute().data
         ) or []
-        active_names = {t["name"].strip().lower() for t in active}
 
-        ledger = cm.load_ledger(db=db)
-        used_names = {r.get("title", "").strip().lower() for r in ledger}
-        unused_pool = active_names - used_names
+        used_topic_ids = set()
+        try:
+            vids = db.table("videos").select("topic_id").execute().data or []
+            used_topic_ids = {v["topic_id"] for v in vids if v.get("topic_id")}
+        except Exception as e:
+            print(f"[topic_synthesizer] \u26a0 Could not read video history: {e}")
 
-        if len(unused_pool) >= min_pool:
+        unused = [t for t in active if t["id"] not in used_topic_ids]
+
+        if len(unused) >= min_pool:
             return 0
 
-        needed = min(min_pool - len(unused_pool), SYNTHESIZE_BATCH)
+        needed = min(min_pool - len(unused), SYNTHESIZE_BATCH)
         print(f"[topic_synthesizer] Pool for '{persona['label']}' is at "
-              f"{len(unused_pool)}/{min_pool} — synthesizing {needed} more.")
+              f"{len(unused)}/{min_pool} fresh topic(s) \u2014 synthesizing {needed} more.")
 
+        ledger = cm.load_ledger(db=db)
         all_topic_names = {
             t["name"].strip().lower()
             for t in (db.table("topics").select("name").execute().data or [])
         }
-        # Rotate the lens starting point by day so consecutive days don't
-        # always lead with the same kind of question.
+
         rotation = datetime.now(timezone.utc).timetuple().tm_yday
         ideas = synthesize_topics(persona_key, needed, all_topic_names, ledger, rotation)
 
         # Fall back to unused seed topics if the model call failed or returned
-        # too few — the persona must never go dry just because one API call
-        # had a bad day.
+        # too few — a persona must never go dry because one API call had a bad
+        # day. This matters more now that Gemini 503s are common.
         if len(ideas) < needed:
             for seed in persona["seed_topics"]:
                 if seed.strip().lower() not in all_topic_names:
@@ -196,20 +207,57 @@ def ensure_persona_topic_pool(persona_key: str, db, min_pool: int = MIN_POOL_SIZ
         return 0
 
 
-def ensure_all_active_persona_pools(db, min_pool: int = MIN_POOL_SIZE) -> dict:
-    """Tops up every persona that at least one enabled channel actually uses.
+def resolve_active_personas(db) -> list:
+    """Works out which personas should have topics invented for them.
 
-    Only personas with a real channel behind them get topics synthesized —
-    there is no point inventing videos for a domain nobody is publishing to.
+    Checks three sources in order. Relying only on the first one meant this
+    entire feature silently never ran for anyone who had not yet set up a
+    persona-backed channel — which was the real situation: a handful of old
+    topics, no personas anywhere, so the pool top-up did nothing and every
+    video was drawn from the same tiny stale list, producing duplicates.
+
+      1. The `auto_topic_personas` setting — an explicit comma-separated list.
+         Highest priority because a person set it deliberately.
+      2. Personas attached to enabled channels.
+      3. Personas already referenced by existing topics.
     """
     try:
+        rows = db.table("settings").select("key, value").eq("key", "auto_topic_personas").execute().data or []
+        if rows and (rows[0].get("value") or "").strip():
+            keys = [k.strip() for k in rows[0]["value"].split(",") if k.strip()]
+            valid = [k for k in keys if personas_mod.get_persona(k)]
+            if valid:
+                print(f"[topic_synthesizer] Using auto_topic_personas setting: {valid}")
+                return valid
+    except Exception:
+        pass
+
+    try:
         channels = db.table("channels").select("persona_key").eq("is_enabled", True).execute().data or []
-        active_personas = {c["persona_key"] for c in channels if c.get("persona_key")}
+        from_channels = sorted({c["persona_key"] for c in channels if c.get("persona_key")})
+        if from_channels:
+            return from_channels
     except Exception as e:
         print(f"[topic_synthesizer] \u26a0 Could not read channels: {e}")
-        return {}
 
-    return {p: ensure_persona_topic_pool(p, db, min_pool) for p in active_personas}
+    try:
+        topics = db.table("topics").select("persona_key").eq("is_active", True).execute().data or []
+        from_topics = sorted({t["persona_key"] for t in topics if t.get("persona_key")})
+        if from_topics:
+            return from_topics
+    except Exception:
+        pass
+
+    print("[topic_synthesizer] No personas configured anywhere \u2014 automatic topic "
+          "rotation is OFF. Pick a persona on the Channels page, or set "
+          "'auto_topic_personas' in Settings, to turn it on.")
+    return []
+
+
+def ensure_all_active_persona_pools(db, min_pool: int = MIN_POOL_SIZE) -> dict:
+    """Tops up every persona that should be generating content."""
+    return {p: ensure_persona_topic_pool(p, db, min_pool) for p in resolve_active_personas(db)}
+
 
 
 if __name__ == "__main__":

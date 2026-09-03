@@ -55,10 +55,20 @@ def _full_script_text(storyboard: dict) -> str:
     return " ".join(s.get("voice_text", "") for s in scenes)
 
 
-def check_duplicate(new_storyboard: dict, lookback_days: int = LOOKBACK_DAYS) -> dict:
+def check_duplicate(new_storyboard: dict, lookback_days: int = LOOKBACK_DAYS, db=None) -> dict:
     """
     Compares a freshly generated storyboard's script text against recently
     generated videos (any status) in the last `lookback_days`.
+
+    `db` accepts an existing Supabase client so callers inside a generation
+    loop can reuse their connection instead of opening a new one per video.
+    It was added because the orchestrator was already passing db= and this
+    function did not accept it, which raised
+    "check_duplicate() got an unexpected keyword argument 'db'" on EVERY
+    video — meaning the pre-render duplicate check never ran once, and the
+    exception killed the whole generation instead. A signature mismatch on a
+    safety check is worse than no safety check, because it looks like it is
+    working.
 
     Returns:
         {"is_duplicate": bool, "similarity": float, "matched_title": str | None}
@@ -73,7 +83,7 @@ def check_duplicate(new_storyboard: dict, lookback_days: int = LOOKBACK_DAYS) ->
         if not new_text.strip():
             return {"is_duplicate": False, "similarity": 0.0, "matched_title": None}
 
-        db = _get_db()
+        db = db or _get_db()
         cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
         result = (
             db.table("videos")

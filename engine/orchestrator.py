@@ -272,12 +272,20 @@ def run_generation_pipeline():
 
             # Second, independent check: near-identical SCRIPT text against
             # every video generated recently, whatever its status.
-            # duplicate_check has always run, but only as a FLAG applied after
-            # rendering, which stopped auto-approve and nothing else — so a
-            # repeat still got fully rendered and still landed in the queue.
-            # Checking here means an identical script costs one model call
-            # instead of five minutes of render time.
-            script_dup = duplicate_check.check_duplicate(storyboard, db=db)
+            #
+            # Wrapped in try/except deliberately. This is a SAFETY check, and a
+            # safety check that throws is worse than one that is absent: a
+            # signature mismatch here previously raised on every single video
+            # and killed the entire generation run, so nothing was produced AND
+            # nothing was deduplicated. A check that cannot run should degrade
+            # to "allow through and say so", never to "destroy the pipeline".
+            try:
+                script_dup = duplicate_check.check_duplicate(storyboard, db=db)
+            except Exception as dup_error:
+                print(f"[orchestrator] \u26a0 Script duplicate check failed to run "
+                      f"({dup_error}) — continuing without it.")
+                script_dup = {"is_duplicate": False}
+
             if script_dup.get("is_duplicate"):
                 concept_rejected += 1
                 print(f"[orchestrator] \u2717 Skipped: script is "

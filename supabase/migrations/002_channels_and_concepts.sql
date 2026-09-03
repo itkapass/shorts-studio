@@ -210,3 +210,20 @@ ALTER TABLE videos ADD  CONSTRAINT videos_topic_id_fkey
 ALTER TABLE videos DROP CONSTRAINT IF EXISTS videos_tone_id_fkey;
 ALTER TABLE videos ADD  CONSTRAINT videos_tone_id_fkey
     FOREIGN KEY (tone_id) REFERENCES tones(id) ON DELETE SET NULL;
+
+
+-- ── Automatic topic rotation ────────────────────────────────────────────────
+-- Comma-separated persona keys that should have fresh topics invented for them
+-- before each generation run. This is the switch that makes topic rotation
+-- fully automatic: with it set, you never add a topic by hand again.
+--
+-- Seeded with the tech explainer so the feature is live immediately rather
+-- than silently doing nothing until someone discovers it needs configuring.
+-- Valid keys are in engine/personas.py:
+--   tech_science_explainer, comedy_skits, top10_and_facts,
+--   what_if_physics, awareness_comedy, everyday_origins,
+--   motivation_and_discipline
+
+INSERT INTO settings (key, value)
+SELECT 'auto_topic_personas', 'tech_science_explainer'
+WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key = 'auto_topic_personas');

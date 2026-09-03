@@ -13,7 +13,8 @@ export default function SettingsPage() {
     max_videos_daily: '5',
     auto_approve: 'false',
     default_render_style: 'stock_footage',
-    gemini_temperature: '0.9'
+    gemini_temperature: '0.9',
+    auto_topic_personas: ''
   })
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -141,6 +142,34 @@ export default function SettingsPage() {
             </select>
             <div className="form-hint">
               Used for any topic that doesn't set its own style in Topic Studio.
+            </div>
+
+            <label className="form-label" style={{ marginTop: 16 }}>
+              Automatic Topic Rotation
+            </label>
+            <input
+              type="text"
+              className="form-input"
+              value={settings.auto_topic_personas}
+              onChange={e => setSettings({ ...settings, auto_topic_personas: e.target.value })}
+              placeholder="tech_science_explainer, comedy_skits"
+            />
+            <div className="form-hint">
+              <strong>This is what stops you adding topics by hand.</strong> Comma-separated
+              persona keys. Before every generation run, the app checks how many unused topics
+              each listed persona has left, and if it is running low it invents new specific ones
+              inside that domain — each through a different <em>kind</em> of question so they
+              never converge into forty "how does X work" videos.
+              <br /><br />
+              A topic counts as used the moment it produces a video, so every new video reaches
+              for a genuinely new subject.
+              <br /><br />
+              Valid keys: <code>tech_science_explainer</code>, <code>comedy_skits</code>,{' '}
+              <code>top10_and_facts</code>, <code>what_if_physics</code>,{' '}
+              <code>awareness_comedy</code>, <code>everyday_origins</code>,{' '}
+              <code>motivation_and_discipline</code>
+              <br /><br />
+              Leave blank to fall back to whatever personas your Channels use.
             </div>
 
             <label className="form-label" style={{ marginTop: 16 }}>
