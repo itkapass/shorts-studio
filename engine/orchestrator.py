@@ -365,6 +365,7 @@ def run_generation_pipeline():
             # video and fill the queue with red — which is exactly what
             # happened before this check existed.
             print(f"[orchestrator] \U0001f6d1 Stopping run: {e}")
+            _log_failure(db, job_id, topic, tone, f"Stopped early — Gemini quota: {e}")
             alerts.alert(
                 "Generation stopped — Gemini daily quota reached",
                 f"{successful} video(s) were generated before the free-tier quota ran out.\n\n"
@@ -377,6 +378,12 @@ def run_generation_pipeline():
             if api_budget.is_quota_error(e):
                 budget.hard_stop(str(e)[:200])
                 print(f"[orchestrator] \U0001f6d1 Gemini quota exhausted — stopping the run.")
+                # A real, visible row — without this, a quota stop was
+                # completely invisible: no failure row, no queue entry,
+                # nothing to click on. Exactly the mystery this run created.
+                _log_failure(db, job_id, topic, tone,
+                             f"Stopped early — Gemini's real daily quota was already used up "
+                             f"(likely from earlier attempts today, before quota tracking existed): {e}")
                 alerts.alert(
                     "Generation stopped — Gemini daily quota reached",
                     f"{successful} video(s) were generated before the free-tier quota ran out.\n\n"
