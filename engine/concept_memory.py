@@ -57,7 +57,22 @@ _STOPWORDS = {
 
 
 def _keywords(text: str) -> set:
-    words = re.findall(r"[a-z][a-z0-9\-]{2,}", (text or "").lower())
+    """Extracts word-like tokens for similarity comparison.
+
+    FIXED — this was Latin-only ([a-z]), which made it silently blind to any
+    non-Latin script. Verified directly: running it on real Tamil text
+    returned an empty set, every time, for any input. That meant two
+    IDENTICAL Tamil topics scored a topical similarity of exactly 0.0 forever
+    — the duplicate check could never catch a repeated Tamil proverb, poem,
+    or slang term, no matter how many times it was generated.
+
+    `[^\\W\\d_]` matches any Unicode "word" character that is not a digit or
+    underscore — i.e. a letter in ANY script, not just a-z. Python's `re`
+    module is Unicode-aware by default for str patterns, so this correctly
+    tokenizes Tamil, Hindi, or any other script the exact same way it
+    tokenizes English, with no per-language special case needed.
+    """
+    words = re.findall(r"[^\W\d_]{3,}", (text or "").lower())
     return {w for w in words if w not in _STOPWORDS}
 
 

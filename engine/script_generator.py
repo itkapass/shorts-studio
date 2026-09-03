@@ -85,21 +85,35 @@ MAX_RETRIES = 4
 RETRY_BACKOFF_SECONDS = 3  # doubles each attempt: 3s, 6s, 12s, 24s
 
 
-def _get_client():
-    """Returns (client, model_name). NOTE: this project previously used the
-    `google.generativeai` package, which — as of testing this fix — prints:
-        'All support for the `google.generativeai` package has ended.
-         Please switch to the `google.genai` package as soon as possible.'
-    That's not just a stale model string, it's the whole SDK reaching
-    end-of-life. Migrated to `google.genai` (the current package) here."""
-    cfg = require(["GEMINI_API_KEY"])
-    client = genai.Client(api_key=cfg["GEMINI_API_KEY"])
+def _get_client(api_key: str = None):
+    """Returns (client, model_name).
+
+    `api_key`, when given, overrides the global GEMINI_API_KEY. This is what
+    makes per-channel Gemini keys work: each Google account gets its own
+    independent free-tier quota (~20 requests/day), so a channel with its own
+    key is not competing with every other channel for the same 20 requests.
+    Get one free at aistudio.google.com with a different Google account, then
+    set GEMINI_API_KEY_<SUFFIX> the same way YOUTUBE_CLIENT_ID_<SUFFIX>
+    already works for multi-channel YouTube credentials (see docs/07).
+
+    NOTE — this project previously used the `google.generativeai` package,
+    which — as of testing this fix — prints: 'All support for the
+    `google.generativeai` package has ended. Please switch to the
+    `google.genai` package as soon as possible.' That's not just a stale
+    model string, the whole SDK reached end-of-life. Migrated to `google.genai`
+    (the current package) here.
+    """
+    key = api_key
+    if not key:
+        cfg = require(["GEMINI_API_KEY"])
+        key = cfg["GEMINI_API_KEY"]
+    client = genai.Client(api_key=key)
     # Model names are discovered from Google's live model list rather than
     # hardcoded. Google retires Gemini names on a ~4-6 month cycle and this
     # project already got 404'd once by a pinned name; asking the API what
     # exists right now means that failure mode is gone for good.
     # Setting GEMINI_MODEL still pins a specific name and skips discovery.
-    model_name = model_registry.choose_text_model(cfg["GEMINI_API_KEY"]) or DEFAULT_GEMINI_MODEL
+    model_name = model_registry.choose_text_model(key) or DEFAULT_GEMINI_MODEL
     return client, model_name
 
 
@@ -318,7 +332,8 @@ OUTPUT FORMAT (strict JSON, no extra markdown or commentary):
 def generate_storyboard(topic: dict, tone: dict, num_scenes: int = 5,
                         render_style: str = "stock_footage",
                         archetype: str = None, avoid_list: str = "",
-                        structure: str = None, creative_brief: dict = None) -> dict:
+                        structure: str = None, creative_brief: dict = None,
+                        api_key: str = None, temperature: float = None) -> dict:
     """Generates a complete video storyboard from a topic/tone config row.
 
     `archetype` decides the KIND of video (unknown-fact, myth-bust, dark
@@ -348,6 +363,8 @@ def generate_storyboard(topic: dict, tone: dict, num_scenes: int = 5,
         avoid_list=avoid_list,
         structure=structure,
         creative_brief=creative_brief,
+        api_key=api_key,
+        temperature=temperature,
     )
 
 
@@ -362,6 +379,8 @@ def generate_custom_storyboard(
     avoid_list: str = "",
     structure: str = None,
     creative_brief: dict = None,
+    api_key: str = None,
+    temperature: float = None,
 ) -> dict:
     """Generates a video storyboard from any free-form prompt.
 
@@ -378,11 +397,17 @@ def generate_custom_storyboard(
     if render_style not in available_styles():
         render_style = "stock_footage"
 
-    client, model_name = _get_client()
+    client, model_name = _get_client(api_key)
     system_prompt = _build_system_prompt(render_style, num_scenes, archetype, avoid_list,
                                         structure, creative_brief)
-    temperature = get("GEMINI_TEMPERATURE")
-    temperature = float(temperature) if temperature else None
+    # An explicit caller-supplied temperature (usually a persona's own
+    # default_temperature) wins; otherwise fall back to the global env/
+    # Settings value, same as before this parameter existed.
+    if temperature is None:
+        env_temp = get("GEMINI_TEMPERATURE")
+        temperature = float(env_temp) if env_temp else None
+    else:
+        temperature = float(temperature)
 
     user_prompt = f"""
 SUBJECT:
@@ -498,7 +523,7 @@ Generate a {num_scenes}-scene storyboard adhering strictly to the JSON schema.
 
 # ─── Visual relevance ranking ────────────────────────────────────────────────
 
-def rank_visual_candidates(scene_text: str, keyword: str, candidates: list) -> list:
+def rank_visual_candidates(scene_text: str, keyword: str, candidates: list, api_key: str = None) -> list:
     """Given several stock clips, returns their indices best-match-first.
 
     Called by visual_fetcher for every scene with more than one candidate. It
@@ -513,7 +538,7 @@ def rank_visual_candidates(scene_text: str, keyword: str, candidates: list) -> l
     if not candidates:
         return []
     try:
-        client, model_name = _get_client()
+        client, model_name = _get_client(api_key)
     except Exception:
         return []
 

@@ -208,13 +208,23 @@ def default_caption_style_for(render_style: str, persona_key: str = None) -> Cap
             bg_box=False,             # no box — this style relies on the paper bg for contrast
         )
     if render_style == "quote_card":
+        # Dark ink on the warm paper background, not white — white was
+        # correct for the old near-black gradient and is now invisible on the
+        # cream "elite" background. Font is chosen per-scene at render time
+        # (see _font_for_text) so Tamil or other non-Latin scripts get a font
+        # that can actually draw their glyphs instead of showing tofu boxes.
         return CaptionStyle(
             font_file="assets/fonts/Montserrat-Variable.ttf",
-            font_size=76,
-            font_color="#FFFFFF",
-            highlight_color="#FFD700",
-            stroke_color="#000000",
-            stroke_width=2,
+            font_size=68,
+            font_color="#3A3226",
+            highlight_color="#8B5E34",
+            # stroke_color is read unconditionally in _render_text_card even
+            # when stroke_width is 0 (it's only the drawing loop that's
+            # skipped) — passing None here crashes _hex_to_rgb(None) on the
+            # very first quote_card render. Keep a valid hex value; stroke
+            # simply never gets drawn because stroke_width is 0.
+            stroke_color="#3A3226",
+            stroke_width=0,
             bg_box=False,
         )
 
@@ -325,6 +335,39 @@ def _load_font(font_path: str, font_size: int):
     return font
 
 
+# Unicode block ranges mapped to a font that can actually draw them. Montserrat
+# and Kalam are Latin-only; asking either to draw Tamil silently renders empty
+# boxes ("tofu") instead of failing loudly, which is exactly the trap here —
+# it would look like the pipeline succeeded while producing an unusable video.
+_SCRIPT_FONTS = (
+    ((0x0B80, 0x0BFF), "assets/fonts/NotoSansTamil-Bold.ttf"),   # Tamil
+)
+
+
+def _font_for_text(text: str, requested_font_path: str) -> str:
+    """Returns the font path that can actually draw `text`.
+
+    Checks the FIRST character outside basic punctuation/whitespace against
+    known script ranges. One representative character is enough — captions
+    render one language at a time in practice, and checking every character
+    would not change the outcome, only the cost.
+    """
+    for ch in text or "":
+        code = ord(ch)
+        if code < 0x2000 and not ch.isalpha():
+            continue  # punctuation, digits, spaces — no script information
+        for (lo, hi), font_path in _SCRIPT_FONTS:
+            if lo <= code <= hi:
+                import os
+                if os.path.exists(font_path):
+                    return font_path
+                print(f"[video_compositor] \u26a0 Text needs a font for U+{code:04X} but "
+                      f"{font_path} is missing; falling back to {requested_font_path} "
+                      f"(that script will render as blank boxes).")
+        break  # first alphabetic character decided it either way
+    return requested_font_path
+
+
 def _render_text_card(words, active_index: int, style: CaptionStyle, font_path: str,
                        emphasis_mask: list = None) -> np.ndarray:
     """Renders one caption card, colouring `active_index` in the highlight
@@ -348,6 +391,11 @@ def _render_text_card(words, active_index: int, style: CaptionStyle, font_path: 
         words = words.split()
     if not words:
         return np.zeros((1, 1, 4), dtype=np.uint8)
+
+    # Pick a font that can actually draw this text's script BEFORE any
+    # measurement happens — measuring with the wrong font would silently
+    # compute layout for boxes-that-render-as-tofu instead of real glyphs.
+    font_path = _font_for_text(" ".join(words), font_path)
 
     emphasis_mask = emphasis_mask or [False] * len(words)
     font_size = style.font_size

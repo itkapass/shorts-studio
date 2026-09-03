@@ -84,12 +84,34 @@ def get_supabase() -> Client:
 
 # ─── Core Pipeline ────────────────────────────────────────────────────────────
 
-def run_generation_pipeline():
-    """Main entry point for the scheduled batch. Generates up to
-    MAX_VIDEOS_PER_RUN videos and queues them as 'pending'."""
+def run_generation_pipeline(manual_count: int = None):
+    """Main entry point for generation.
+
+    REWORKED FROM A SINGLE DAILY BATCH TO A SPREAD SCHEDULE.
+
+    Previously one run at 2 AM tried to generate the whole day's videos
+    (e.g. 8) in one go. That has two real problems: it looks exactly like
+    what YouTube's "mass-produced content" detection watches for — a burst of
+    uploads from one source at one moment — and it fails all-or-nothing: if
+    Gemini's quota runs out partway through, the rest of the day produces
+    nothing until tomorrow.
+
+    Now the workflow itself runs every 2 hours (see generate.yml), and each
+    run only tops up toward the day's target rather than trying to hit it in
+    one shot. A `videos_generated_<date>` counter (same pattern as the
+    Gemini budget counter) tracks how many have been made today across ALL
+    of today's runs; each run generates min(PER_RUN_CAP, what's left today).
+    Once today's target is reached, later runs exit immediately — that is
+    the normal, expected outcome for most runs, not a failure.
+
+    `manual_count`, when given (e.g. `python -m engine.orchestrator --count 5`,
+    or the workflow's manual "how many right now" input), bypasses the
+    per-run spreading cap for that one run — an explicit human request to
+    generate a specific number right now is not the pattern YouTube's
+    automation detection cares about; a silent scheduled burst is.
+    """
     print(f"\n{'='*60}")
     print(f"[orchestrator] Pipeline started: {datetime.now(timezone.utc).isoformat()}")
-    print(f"[orchestrator] Generating up to {MAX_VIDEOS_PER_RUN} video drafts...")
     print(f"{'='*60}\n")
 
     db = get_supabase()
@@ -99,15 +121,27 @@ def run_generation_pipeline():
     if default_style not in available_styles():
         default_style = DEFAULT_STYLE
 
-    # FIXED: max_videos_daily existed in the settings table and the Admin
-    # Panel's Settings page, but nothing ever read it — MAX_VIDEOS_PER_RUN
-    # was a hardcoded constant, so changing this in the dashboard did
-    # nothing. It's now the actual source of truth (falls back to the
-    # constant if unset or invalid).
     try:
-        videos_this_run = int(settings.get("max_videos_daily", MAX_VIDEOS_PER_RUN))
+        daily_target = int(settings.get("max_videos_daily", MAX_VIDEOS_PER_RUN))
     except (TypeError, ValueError):
-        videos_this_run = MAX_VIDEOS_PER_RUN
+        daily_target = MAX_VIDEOS_PER_RUN
+
+    if manual_count is not None:
+        videos_this_run = max(1, int(manual_count))
+        print(f"[orchestrator] Manual run requested: generating {videos_this_run} now "
+              f"(daily target of {daily_target} still applies to scheduled runs).")
+    else:
+        made_today = _count_videos_made_today(db)
+        remaining_today = max(0, daily_target - made_today)
+        videos_this_run = min(remaining_today, PER_RUN_SPREAD_CAP)
+        print(f"[orchestrator] Daily target {daily_target}, {made_today} made today already, "
+              f"{remaining_today} remaining. This run will attempt {videos_this_run}.")
+
+        if videos_this_run < 1:
+            print("[orchestrator] Today's target is already met. Nothing to do this run — "
+                  "this is normal, not a failure. The next run will check again.")
+            return
+
     auto_approve = str(settings.get("auto_approve", "false")).lower() == "true"
 
     # Check storage BEFORE rendering anything. A render is 5+ minutes of
@@ -184,13 +218,12 @@ def run_generation_pipeline():
     # (creative brief + storyboard). Check the budget BEFORE starting rather
     # than discovering it via 429s halfway through — a half-spent budget
     # produces a queue full of failures and no videos.
-    budget = api_budget.BudgetTracker(
-        db=db,
-        daily_budget=settings.get("gemini_daily_budget") or api_budget.DEFAULT_DAILY_BUDGET,
+    _default_budget = api_budget.BudgetTracker(
+        db=db, daily_budget=settings.get("gemini_daily_budget") or api_budget.DEFAULT_DAILY_BUDGET,
     )
-    budget.load()
+    _default_budget.load()
     cost_each = api_budget.estimate_calls_per_video(use_brief=True, use_ranking=False)
-    affordable = budget.remaining // max(cost_each, 1)
+    affordable = _default_budget.remaining // max(cost_each, 1)
 
     if affordable < 1:
         alerts.alert(
@@ -215,6 +248,25 @@ def run_generation_pipeline():
     successful, attempted = 0, 0
     gate_rejected, concept_rejected = 0, 0
     errors = []
+
+    # One BudgetTracker per Gemini key actually in use this run, not one
+    # global tracker. Without this, giving a channel its own key would not
+    # help: every video would still increment the SAME shared counter, so
+    # three channels would still look like they share one 20/day pool even
+    # after being given three separate ones.
+    all_channels = channels_mod.load_channels(db=db)
+    budgets_by_key: dict = {}
+
+    def budget_for_persona(persona_key):
+        channel = next((c for c in all_channels if c.get("persona_key") == persona_key), None)
+        api_key = channels_mod.gemini_key_for(channel) if channel else None
+        key_id = (channel.get("env_suffix") or "default") if channel else "default"
+        if key_id not in budgets_by_key:
+            b = api_budget.BudgetTracker(db=db, daily_budget=api_budget.DEFAULT_DAILY_BUDGET, key_id=key_id)
+            b.load()
+            print(f"[orchestrator] Gemini budget for '{key_id}': {b.spent}/{b.daily_budget} used today.")
+            budgets_by_key[key_id] = b
+        return budgets_by_key[key_id], api_key
 
     for i in range(videos_this_run):
         topic = topics[i % len(topics)]
@@ -277,18 +329,29 @@ def run_generation_pipeline():
 
         attempted += 1
         try:
+            # Resolve which Gemini key (and therefore which quota pool) this
+            # video draws from, based on its persona's channel.
+            budget, gemini_key = budget_for_persona(persona_key)
+
             # Reserve before starting so a video is never begun half-funded.
             budget.require(cost_each, f"video {i+1}")
             # STAGE 1: decide what this video should BE. One extra model call,
             # free on the current tier, and the single biggest quality lever
             # available — it stops the writer defaulting to the obvious video.
-            creative_brief = brief_mod.generate_brief(topic, archetype, structure, persona_key=persona_key)
+            # Each persona knows its own right creativity level — facts need
+            # precision (lower), comedy needs surprise (higher). Falls back to
+            # the global Settings slider for topics with no persona.
+            temperature = (persona.get("default_temperature") if persona else None) \
+                          or settings.get("gemini_temperature")
+
+            creative_brief = brief_mod.generate_brief(topic, archetype, structure,
+                                                       persona_key=persona_key, api_key=gemini_key)
 
             # STAGE 2: write it.
             storyboard = generate_storyboard(
                 topic, tone, num_scenes=5, render_style=render_style,
                 archetype=archetype, avoid_list=avoid_list, structure=structure,
-                creative_brief=creative_brief,
+                creative_brief=creative_brief, api_key=gemini_key, temperature=temperature,
             )
 
             # Reject repeats BEFORE rendering. Checking after would waste the
@@ -355,6 +418,7 @@ def run_generation_pipeline():
             avoid_list = concept_memory.avoid_list_for_prompt(ledger)
 
             budget.spend(cost_each)
+            _increment_videos_made_today(db)
             successful += 1
             print(f"[orchestrator] \u2713 Video {i+1} queued for review: {result['video_path']} "
                   f"(Gemini budget: {budget.spent}/{budget.daily_budget})")
@@ -621,6 +685,38 @@ def _save_and_finalize(db, result, job_id, topic_id, tone_id, render_style, tone
     storage_module.upload_video(result["video_path"], job_id, db=db)
 
 
+PER_RUN_SPREAD_CAP = 2  # a single automatic run never generates more than this
+
+
+def _count_videos_made_today(db) -> int:
+    """How many videos have already been generated today, across every run.
+
+    Persisted the same way as the Gemini budget counter: a settings row keyed
+    by UTC date, incremented after each success. This is what lets generation
+    be split across many small runs through the day instead of one big batch —
+    each run can tell how much of today's target is already done.
+    """
+    key = f"videos_made_{datetime.now(timezone.utc).strftime('%Y_%m_%d')}"
+    try:
+        rows = db.table("settings").select("value").eq("key", key).execute().data
+        return int(rows[0]["value"]) if rows else 0
+    except Exception:
+        return 0
+
+
+def _increment_videos_made_today(db, by: int = 1):
+    key = f"videos_made_{datetime.now(timezone.utc).strftime('%Y_%m_%d')}"
+    try:
+        existing = db.table("settings").select("key, value").eq("key", key).execute().data
+        if existing:
+            new_val = int(existing[0].get("value") or 0) + by
+            db.table("settings").update({"value": str(new_val)}).eq("key", key).execute()
+        else:
+            db.table("settings").insert({"key": key, "value": str(by)}).execute()
+    except Exception as e:
+        print(f"[orchestrator] \u26a0 Could not update today's video count: {e}")
+
+
 def _expire_stale_render_jobs(db, max_age_hours: int = 3):
     """Marks jobs that have been 'queued_for_render' too long as failed.
 
@@ -709,6 +805,15 @@ def render_existing_job(job_id: str) -> dict:
 
 # ─── Entry Point ──────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    import argparse as _argparse
+    _p = _argparse.ArgumentParser(description="Run the generation pipeline")
+    _p.add_argument("--count", type=int, default=None,
+                     help="Generate this many videos right now, bypassing the "
+                          "spread-across-the-day cap (a deliberate manual run).")
+    _args, _ = _p.parse_known_args()
+    if _args.count is not None:
+        run_generation_pipeline(manual_count=_args.count)
+        raise SystemExit(0)
     parser = argparse.ArgumentParser(description="AI Video Pipeline Orchestrator")
     parser.add_argument("--prompt", type=str, help="Generate AND render a custom video for a specific prompt (regenerates the storyboard from scratch)")
     parser.add_argument("--render-job", type=str, help="Render a specific job_id that already has a storyboard saved (e.g. from the Admin Panel's Create Video page)")

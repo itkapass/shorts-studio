@@ -102,6 +102,7 @@ def generate_brief(
     structure: str,
     use_pulse: bool = True,
     persona_key: str = None,
+    api_key: str = None,
 ) -> dict:
     """Produces a creative brief for one video.
 
@@ -137,7 +138,7 @@ NARRATIVE STRUCTURE: {s['label']} — {s['blurb']}
 Now do the five-angle process and return the brief as JSON."""
 
     try:
-        client, model_name = _get_client()
+        client, model_name = _get_client(api_key)
         response = _call_model_with_clear_errors(client, model_name, BRIEF_SYSTEM, user)
         brief = _extract_json(response.text)
 

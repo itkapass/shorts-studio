@@ -37,22 +37,54 @@ from engine import personas as personas_mod
 from engine import concept_memory as cm
 from engine import lenses as lenses_mod
 
-MIN_POOL_SIZE = 5
-SYNTHESIZE_BATCH = 6
+MIN_POOL_SIZE = 15
+SYNTHESIZE_BATCH = 20
 
-SYNTH_SYSTEM = """You invent specific YouTube Shorts topics inside one content
-domain. You do not write scripts — only short, specific topic ideas someone
+SYNTH_SYSTEM = """You are a short-form content strategist inventing new video topics
+inside one domain. You do not write scripts — only specific topic ideas someone
 could later write a 45-second video about.
 
-A good topic here is NARROW and CONCRETE, not a broad umbrella. "Space" is not
-a topic. "Why astronauts' bones lose density in zero gravity, and what they do
-about it" is a topic.
+You will be given a handful of EXAMPLE topics. Read them once to understand the
+domain's tone and register, then STOP referring to them. Your job is to explore
+the FULL SPACE the domain description implies, not to write more topics that
+resemble the examples. If your ideas would sit comfortably in a list next to the
+examples, you have not gone far enough — you have found the boring, adjacent
+version of an idea instead of a genuinely different one inside the same domain.
+
+WHAT MAKES A TOPIC WORTH MAKING, IN ORDER OF IMPORTANCE:
+
+1. SPECIFICITY. "Space" is not a topic. "Why astronauts' bones lose density in
+   zero gravity, and what they actually do about it" is a topic. If a topic
+   could be the title of a whole book, narrow it until it is the title of one
+   scene from that book.
+
+2. A CURIOSITY GAP. The topic should create a question in the reader's head
+   that they cannot immediately answer, and want to. "How keyboards work" has
+   no gap. "Why keyboards are arranged in an order that seems designed to slow
+   you down" has one — it implies a surprising reason exists.
+
+3. A REASON A STRANGER WOULD STOP SCROLLING. Not "is this interesting to
+   someone who already cares about this domain" but "would someone with zero
+   prior interest still stop for this specific detail". Concrete numbers, named
+   real things, and surprising mechanisms clear this bar. Vague abstractions do
+   not.
+
+4. NOT THE OBVIOUS FIRST THOUGHT. For any subject, there is a version anyone
+   would think of in five seconds. Do not write that version. Write the one a
+   genuine expert in the domain would bring up that a casual outsider would not
+   have thought to ask.
+
+5. GENUINE VARIETY ACROSS THE BATCH. Do not submit five topics that are all the
+   same shape wearing different subjects — five "how X works" or five "top facts
+   about Y". Vary the kind of question being asked (mechanism, origin, scale,
+   misconception, cost, comparison, edge case) across the batch, not just the
+   subject matter.
 
 Every idea must:
-  - Fit the domain description exactly — do not drift into an adjacent domain.
-  - Be genuinely different from every existing topic and seed example given —
-    not a reword of one, a different specific subject entirely.
-  - Be something a single 45-second video could actually cover well.
+  - Fit the domain description — do not drift into an unrelated domain.
+  - Be genuinely different from every existing topic and seed example given.
+  - Be something a single 45-second video could actually cover well, not a
+    whole documentary's worth of ground.
   - Avoid anything requiring a real named living person as its subject.
 
 Return ONLY a JSON array, no markdown, no preamble:
@@ -70,7 +102,7 @@ def _extract_json_array(text: str) -> list:
 
 
 def synthesize_topics(persona_key: str, n: int, existing_names: set, ledger: list,
-                      rotation_index: int = 0) -> list:
+                      rotation_index: int = 0, api_key: str = None) -> list:
     """Asks Gemini for `n` new topic ideas inside a persona's domain.
 
     Returns [] on any failure — the caller falls back to the persona's static
@@ -91,9 +123,18 @@ def synthesize_topics(persona_key: str, n: int, existing_names: set, ledger: lis
     chosen_lenses = lenses_mod.pick_lenses(persona_key, n, rotation_index)
     lens_text = lenses_mod.prompt_block(chosen_lenses)
 
+    # The persona's own house rules, included here too — not just at script
+    # writing. Without this, a rule like "only use REAL existing proverbs,
+    # never invent one and call it traditional" never reached the step that
+    # actually decides what the topic IS, only the step that writes about a
+    # topic already chosen. Some rules have to apply at naming time or not
+    # at all.
+    house_rules = persona.get("flavor_instructions", "")
+    rules_block = f"\nHOUSE RULES FOR THIS DOMAIN:\n{house_rules}\n" if house_rules else ""
+
     user = f"""DOMAIN: {persona['label']}
 {persona['description']}
-
+{rules_block}
 EXAMPLES OF THE DOMAIN'S SHAPE (do not repeat these, invent NEW ones like them):
 {chr(10).join('- ' + s for s in persona['seed_topics'])}
 
@@ -105,7 +146,7 @@ ALREADY COVERED — do not repeat or closely rephrase any of these:
 Invent exactly {n} new topics, one per lens, in order."""
 
     try:
-        client, model_name = _get_client()
+        client, model_name = _get_client(api_key)
         response = _call_model_with_clear_errors(client, model_name, SYNTH_SYSTEM, user, temperature=1.0)
         ideas = _extract_json_array(response.text)
         cleaned = [
@@ -120,7 +161,7 @@ Invent exactly {n} new topics, one per lens, in order."""
         return []
 
 
-def ensure_persona_topic_pool(persona_key: str, db, min_pool: int = MIN_POOL_SIZE) -> int:
+def ensure_persona_topic_pool(persona_key: str, db, min_pool: int = MIN_POOL_SIZE, api_key: str = None) -> int:
     """Tops up a persona's unused topic pool if it has run low.
 
     "Unused" means an ACTIVE topic that has never produced a video row yet.
@@ -169,7 +210,16 @@ def ensure_persona_topic_pool(persona_key: str, db, min_pool: int = MIN_POOL_SIZ
         }
 
         rotation = datetime.now(timezone.utc).timetuple().tm_yday
-        ideas = synthesize_topics(persona_key, needed, all_topic_names, ledger, rotation)
+        ideas = synthesize_topics(persona_key, needed, all_topic_names, ledger, rotation, api_key=api_key)
+
+        # Track how many ideas actually came from Gemini vs the static seed
+        # list, and TAG THEM DIFFERENTLY. Both used to be inserted under the
+        # identical 'persona-auto' label, which quietly hid a real problem:
+        # while Gemini's quota was being exhausted elsewhere in the pipeline,
+        # every single "synthesized" topic was actually a seed-list fallback,
+        # and there was no way to tell from the dashboard. Now the Topic
+        # Studio badge shows the difference honestly.
+        gemini_invented_count = len(ideas)
 
         # Fall back to unused seed topics if the model call failed or returned
         # too few — a persona must never go dry because one API call had a bad
@@ -182,24 +232,37 @@ def ensure_persona_topic_pool(persona_key: str, db, min_pool: int = MIN_POOL_SIZ
                     break
 
         added = 0
-        for idea in ideas[:needed]:
+        added_from_gemini = 0
+        for idx, idea in enumerate(ideas[:needed]):
             key = idea["name"].strip().lower()
             if key in all_topic_names:
                 continue
+            # Anything past index `gemini_invented_count` is a seed-fallback
+            # insertion, not a real Gemini invention — label it honestly.
+            is_real = idx < gemini_invented_count
             try:
                 db.table("topics").insert({
                     "name": idea["name"],
                     "description": idea.get("description") or "",
                     "persona_key": persona_key,
                     "is_active": True,
-                    "added_by": "persona-auto",
+                    "added_by": "persona-auto" if is_real else "persona-seed-fallback",
                 }).execute()
                 all_topic_names.add(key)
                 added += 1
+                added_from_gemini += 1 if is_real else 0
             except Exception as e:
                 print(f"[topic_synthesizer] \u26a0 Could not insert topic {idea['name']!r}: {e}")
 
-        print(f"[topic_synthesizer] \u2713 Added {added} topic(s) to '{persona['label']}'.")
+        if added_from_gemini < added:
+            print(f"[topic_synthesizer] \u2713 Added {added} topic(s) to '{persona['label']}' "
+                  f"({added_from_gemini} genuinely new from Gemini, "
+                  f"{added - added_from_gemini} filled in from the seed list because "
+                  f"Gemini synthesis did not return enough — check the Gemini budget log "
+                  f"above if this keeps happening).")
+        else:
+            print(f"[topic_synthesizer] \u2713 Added {added} topic(s) to '{persona['label']}', "
+                  f"all genuinely invented by Gemini.")
         return added
 
     except Exception as e:
@@ -255,8 +318,22 @@ def resolve_active_personas(db) -> list:
 
 
 def ensure_all_active_persona_pools(db, min_pool: int = MIN_POOL_SIZE) -> dict:
-    """Tops up every persona that should be generating content."""
-    return {p: ensure_persona_topic_pool(p, db, min_pool) for p in resolve_active_personas(db)}
+    """Tops up every persona that should be generating content.
+
+    Uses each persona's OWN channel's Gemini key when one is set, so topic
+    invention for a channel draws from that channel's own quota pool instead
+    of the shared default — the same reasoning as per-channel keys for
+    script writing, applied to the step before it.
+    """
+    from engine import channels as channels_mod
+    channels = channels_mod.load_channels(db=db)
+
+    results = {}
+    for persona_key in resolve_active_personas(db):
+        channel = next((c for c in channels if c.get("persona_key") == persona_key), None)
+        api_key = channels_mod.gemini_key_for(channel) if channel else None
+        results[persona_key] = ensure_persona_topic_pool(persona_key, db, min_pool, api_key=api_key)
+    return results
 
 
 

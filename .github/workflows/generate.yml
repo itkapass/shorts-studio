@@ -8,11 +8,31 @@ name: Generate Video Drafts
 # ─────────────────────────────────────────────────────────────────
 
 on:
+  # Every 2 hours instead of one big batch at 2 AM.
+  #
+  # A single run generating the whole day's videos at once is exactly the
+  # pattern YouTube's automation/mass-produced-content detection watches
+  # for, and it fails all-or-nothing if the Gemini quota runs out partway
+  # through. Spreading it out means: uploads look organic rather than
+  # dumped, and a quota problem in one run only costs that run's 1-2
+  # videos, not the whole day.
+  #
+  # Each run only tops up toward the daily target (Settings -> Daily video
+  # generation batch) rather than trying to hit it in one shot, so most
+  # runs after the target is met simply do nothing — that is normal.
   schedule:
-    - cron: '0 2 * * *'   # Every day at 2:00 AM UTC
+    - cron: '0 */2 * * *'
 
-  # Also allows manual trigger from GitHub Actions tab (useful for testing)
+  # Manual trigger from the Actions tab. Leave "how many" blank for the
+  # normal automatic behaviour (top up toward today's target). Fill it in
+  # to generate a specific number right now regardless of the daily target
+  # — e.g. to backfill after a quiet day, or to test a change immediately.
   workflow_dispatch:
+    inputs:
+      manual_count:
+        description: "How many videos to generate right now (blank = automatic)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -83,7 +103,11 @@ jobs:
           OUTPUT_DIR:           /tmp/shorts_output
           ASSETS_DIR:           assets
         run: |
-          python -m engine.orchestrator
+          if [ -n "${{ inputs.manual_count }}" ]; then
+            python -m engine.orchestrator --count "${{ inputs.manual_count }}"
+          else
+            python -m engine.orchestrator
+          fi
 
       # ── 7. Safety net: retry-upload anything that didn't already upload ──
       # orchestrator.py uploads each video right after rendering it (with

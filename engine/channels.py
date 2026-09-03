@@ -64,6 +64,29 @@ def load_channels(db=None, only_enabled: bool = True) -> list:
         return []
 
 
+def gemini_key_for(channel: dict) -> str | None:
+    """Resolves a channel's own Gemini API key, if it has one.
+
+    Same env_suffix pattern as YouTube credentials: a channel with
+    env_suffix 'SCIENCE' reads GEMINI_API_KEY_SCIENCE. A channel with no
+    suffix, or whose specific key is not set, falls back to the shared
+    GEMINI_API_KEY — so a single-channel setup needs no changes at all.
+
+    WHY THIS MATTERS: Gemini's free tier is ~20 requests/day PER API KEY,
+    which in practice means per Google account. Every channel sharing one
+    key shares that one 20-request pool between them — three busy channels
+    on one key hit the wall in a third of the time, exactly like three
+    channels sharing one YouTube upload quota. A free Google AI Studio key
+    from a second Google account gets a second independent 20/day pool at
+    zero cost; see docs/07 for the two-minute steps.
+    """
+    suffix = (channel.get("env_suffix") or "").strip().upper()
+    if suffix and not ENV_SUFFIX_RE.match(suffix):
+        return get("GEMINI_API_KEY")
+    var = f"GEMINI_API_KEY_{suffix}" if suffix else "GEMINI_API_KEY"
+    return os.environ.get(var) or get(var) or get("GEMINI_API_KEY")
+
+
 def credentials_for(channel: dict) -> dict | None:
     """Resolves a channel's OAuth credentials from the environment.
 

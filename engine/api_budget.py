@@ -55,9 +55,15 @@ class QuotaExhausted(Exception):
 
 
 class BudgetTracker:
-    def __init__(self, db=None, daily_budget: int = None):
+    def __init__(self, db=None, daily_budget: int = None, key_id: str = "default"):
         self.db = db
         self.daily_budget = int(daily_budget or DEFAULT_DAILY_BUDGET)
+        # key_id distinguishes one Gemini API key's quota from another's. A
+        # single global "today" counter would still show the SAME number for
+        # every channel even after each got its own Gemini key — the whole
+        # point of a separate key is a separate 20/day pool, so the counter
+        # tracking it has to be separate too.
+        self.key_id = key_id or "default"
         self.spent = 0
         self._loaded = False
         self._hard_stopped = False
@@ -65,7 +71,8 @@ class BudgetTracker:
     # ── persistence ─────────────────────────────────────────────────────────
 
     def _today_key(self) -> str:
-        return f"api_calls_{datetime.now(timezone.utc).strftime('%Y_%m_%d')}"
+        date = datetime.now(timezone.utc).strftime('%Y_%m_%d')
+        return f"api_calls_{self.key_id}_{date}"
 
     def load(self):
         """Reads today's spend so a re-run doesn't reset the counter."""

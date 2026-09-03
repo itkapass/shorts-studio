@@ -23,7 +23,8 @@ function topicAge(iso) {
 }
 
 const SOURCE_LABEL = {
-  'persona-auto': '\u2728 auto',
+  'persona-auto': '\u2728 AI-invented',
+  'persona-seed-fallback': '\u{1F331} seed (Gemini was unavailable)',
   'trending-auto': '\u{1F525} trending',
   'manual': 'you',
   'system': 'seeded',
