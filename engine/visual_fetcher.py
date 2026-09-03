@@ -281,9 +281,17 @@ def _select_best_clip(videos: list, duration_needed: float, exclude_video_ids: s
     long_enough = [c for c in unique if c["duration"] >= duration_needed]
     pool = long_enough or unique
 
-    if scene_text:
-        pool = rank_candidates_with_ai(scene_text, keyword_used or "", pool[:6])
-
+    # AI ranking is NOT called here any more.
+    #
+    # It used to run once per scene, which meant a 5-scene video spent 5 Gemini
+    # calls on b-roll selection alone — on a 20-calls-per-day free tier that
+    # single line was over a third of the entire daily budget, and it is why
+    # generation started dying with 429 RESOURCE_EXHAUSTED partway through a
+    # batch. Ranking now happens once for the whole video in rank_all_scenes().
+    #
+    # Falling back to search order is a small quality loss and a large budget
+    # win: Pexels' own relevance ordering is decent, and a video that renders
+    # with slightly worse b-roll beats a video that does not render at all.
     return pool[0] if pool else None
 
 

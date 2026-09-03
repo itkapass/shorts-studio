@@ -75,7 +75,12 @@ DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
 # as temporary). NOT retried: 404 (bad/deprecated model name), 400 (bad
 # request), 403 (bad API key) — retrying those just wastes time on
 # something a retry can't fix.
-RETRYABLE_CODES = {503, 500, 429}
+# 429 is deliberately NOT here. 503/500 mean "the model is busy right now" and
+# a retry very often succeeds. 429 RESOURCE_EXHAUSTED means the DAILY free-tier
+# allowance is gone — retrying cannot help today, and each retry still counts
+# against the quota. Treating them the same meant a single quota error burned
+# four more calls from a budget that was already empty.
+RETRYABLE_CODES = {503, 500}
 MAX_RETRIES = 4
 RETRY_BACKOFF_SECONDS = 3  # doubles each attempt: 3s, 6s, 12s, 24s
 
@@ -149,6 +154,16 @@ def _call_model_with_clear_errors(client, model_name, system_prompt, user_prompt
                     f"https://ai.google.dev/gemini-api/docs/models for the current lineup. "
                     f"This project's default is '{model_name}'."
                 ) from e
+            if code == 429:
+                raise RuntimeError(
+                    f"Gemini daily quota exhausted (429 RESOURCE_EXHAUSTED).\n\n"
+                    f"The free tier allows a limited number of requests per day and today's "
+                    f"allowance is gone. It resets at midnight Pacific.\n\n"
+                    f"To fit more videos into the daily allowance, lower 'Daily video "
+                    f"generation batch' in Settings. Each video costs about 2 requests.\n\n"
+                    f"Original error: {e}"
+                ) from e
+
             if code in RETRYABLE_CODES and attempt < MAX_RETRIES:
                 wait = RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1))
                 print(f"[script_generator] \u26a0 Gemini returned {code} (attempt {attempt}/{MAX_RETRIES}), "

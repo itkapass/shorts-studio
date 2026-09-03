@@ -409,3 +409,53 @@ def character_defaults(name):
 
 def cast_for_archetype(archetype: str):
     return CAST_BY_ARCHETYPE.get(archetype, ["capy", "cat"])
+
+# ── Emotional colour shift ───────────────────────────────────────────────────
+# Taken from a reference video where a character's entire head turns from green
+# to deep red as it gets angrier. It is the single cheapest high-impact device
+# available to this renderer: the viewer reads rising intensity instantly,
+# before a word is spoken and without any extra animation.
+#
+# Implemented as a palette transform rather than new artwork, so it costs
+# nothing per frame and works on every character automatically — including any
+# you add later.
+
+EMOTION_TINTS = {
+    # emotion -> (target RGB, how strongly to blend 0..1)
+    "angry":    ((198, 48, 38), 0.72),
+    "annoyed":  ((196, 96, 62), 0.34),
+    "shocked":  ((238, 232, 210), 0.42),   # blanches pale
+    "sad":      ((92, 118, 166), 0.34),    # cools blue
+    "excited":  ((246, 176, 74), 0.30),    # warms
+    "smug":     ((150, 122, 176), 0.20),
+    "happy":    ((250, 206, 120), 0.22),
+    "confused": ((186, 176, 150), 0.24),
+}
+
+
+def _blend(base, target, amount):
+    return tuple(int(round(b + (t - b) * amount)) for b, t in zip(base[:3], target))
+
+
+def tint_palette(palette: dict, emotion: str) -> dict:
+    """Returns a copy of `palette` shifted toward the emotion's colour.
+
+    Only the character's own surfaces move — body, belly, ears. Ink stays black
+    so the linework does not muddy, and white stays white so eyes keep their
+    contrast against a darkened face. Tinting everything is what makes this
+    trick look like a broken colour filter instead of a character reddening.
+    """
+    spec = EMOTION_TINTS.get((emotion or "").lower())
+    if not spec:
+        return palette
+    target, amount = spec
+
+    out = dict(palette)
+    for key in ("body", "body_dark", "belly", "beak", "tie"):
+        if key in out and isinstance(out[key], (tuple, list)) and len(out[key]) >= 3:
+            out[key] = _blend(out[key], target, amount)
+
+    # Blush intensifies with anger rather than being washed out by it.
+    if "blush" in out and amount > 0.4:
+        out["blush"] = _blend(out["blush"], (210, 60, 50), 0.5)
+    return out

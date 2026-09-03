@@ -128,12 +128,17 @@ class _SpriteCache:
         self.h = int(sprite_h)
         self._cache = {}
 
-    def get(self, name, expression, mouth, brow, pose):
-        key = (name, expression, mouth, brow, pose)
+    def get(self, name, expression, mouth, brow, pose, emotion=None):
+        # `emotion` is part of the cache key because it changes the PALETTE.
+        # Leaving it out would mean the first tint rendered for a character got
+        # reused for every later emotion, so an angry scene would silently show
+        # a calm-coloured character.
+        key = (name, expression, mouth, brow, pose, emotion)
         hit = self._cache.get(key)
         if hit is not None:
             return hit
         parts, pal = charlib.build(name, expression=expression, mouth=mouth, brow=brow, pose=pose)
+        pal = charlib.tint_palette(pal, emotion)
         sprite = Image.new("RGBA", (self.w, self.h), (0, 0, 0, 0))
         draw_character(sprite, parts, pal, (0, 0, self.w, self.h))
         self._cache[key] = sprite
@@ -458,10 +463,13 @@ def build_whole_video_clip(scenes: list, total_duration: float, video_w: int, vi
 
         face = faces[idx]
         speaker = speakers[idx]
+        scene_emotion_raw = scenes[idx].get("emotion")
         cur_viseme = lipsync.viseme_at(viseme_tl, t) if viseme_tl else "REST"
 
         for ci, cname in enumerate(cast):
             speaking = (ci == speaker)
+            # Only the character actually feeling the emotion changes colour.
+            scene_emotion = scene_emotion_raw if speaking else None
 
             # Idle bob: a slow vertical sine so nobody is a frozen statue.
             # Speakers bob a little more than listeners.
@@ -481,11 +489,11 @@ def build_whole_video_clip(scenes: list, total_duration: float, video_w: int, vi
 
             use_mini = (scene_scales[idx] == "mini" and speaking)
             if use_mini:
-                sprite = mini_cache.get(cname, expression, mouth, brow, None)
+                sprite = mini_cache.get(cname, expression, mouth, brow, None, scene_emotion)
                 x = positions[ci][0] + (sprite_w - sprite.width) // 2
                 y = positions[ci][1] + (sprite_h - sprite.height)
             else:
-                sprite = cache.get(cname, expression, mouth, brow, None)
+                sprite = cache.get(cname, expression, mouth, brow, None, scene_emotion)
                 x, y = positions[ci]
             frame.alpha_composite(sprite, (int(x), int(y + bob * video_h / 100.0)))
 

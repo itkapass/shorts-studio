@@ -67,6 +67,7 @@ from engine import archetypes as arch
 from engine import narrative
 from engine import personas as personas_mod
 from engine import topic_synthesizer
+from engine import api_budget
 from engine import brief as brief_mod
 from engine import channels as channels_mod
 from engine.styles import is_multi_voice
@@ -179,6 +180,34 @@ def run_generation_pipeline():
 
     # Loaded once for the whole batch rather than per video: it is the same
     # list every time, and re-reading it five times is five needless queries.
+    # Gemini free tier is roughly 20 requests/day. Each video costs ~2 calls
+    # (creative brief + storyboard). Check the budget BEFORE starting rather
+    # than discovering it via 429s halfway through — a half-spent budget
+    # produces a queue full of failures and no videos.
+    budget = api_budget.BudgetTracker(
+        db=db,
+        daily_budget=settings.get("gemini_daily_budget") or api_budget.DEFAULT_DAILY_BUDGET,
+    )
+    budget.load()
+    cost_each = api_budget.estimate_calls_per_video(use_brief=True, use_ranking=False)
+    affordable = budget.remaining // max(cost_each, 1)
+
+    if affordable < 1:
+        alerts.alert(
+            "Gemini daily quota is used up",
+            f"No videos generated: {budget.spent}/{budget.daily_budget} of today's "
+            f"Gemini free-tier requests are already spent.\n\n"
+            f"The quota resets at midnight Pacific. To fit more videos into it, "
+            f"lower 'Daily video generation batch' in Settings.",
+            severity="warn",
+        )
+        return
+
+    if affordable < videos_this_run:
+        print(f"[orchestrator] Budget allows {affordable} video(s), not {videos_this_run}. "
+              f"Generating {affordable} and stopping cleanly.")
+        videos_this_run = affordable
+
     ledger = concept_memory.load_ledger(db=db)
     avoid_list = concept_memory.avoid_list_for_prompt(ledger)
     print(f"[orchestrator] Concept ledger: {len(ledger)} ideas already used.")
@@ -248,6 +277,8 @@ def run_generation_pipeline():
 
         attempted += 1
         try:
+            # Reserve before starting so a video is never begun half-funded.
+            budget.require(cost_each, f"video {i+1}")
             # STAGE 1: decide what this video should BE. One extra model call,
             # free on the current tier, and the single biggest quality lever
             # available — it stops the writer defaulting to the obvious video.
@@ -323,10 +354,38 @@ def run_generation_pipeline():
             ledger.insert(0, dup["signature"])
             avoid_list = concept_memory.avoid_list_for_prompt(ledger)
 
+            budget.spend(cost_each)
             successful += 1
-            print(f"[orchestrator] \u2713 Video {i+1} queued for review: {result['video_path']}")
+            print(f"[orchestrator] \u2713 Video {i+1} queued for review: {result['video_path']} "
+                  f"(Gemini budget: {budget.spent}/{budget.daily_budget})")
+
+        except api_budget.QuotaExhausted as e:
+            # A quota error is a per-DAY condition, not a per-video one.
+            # Continuing would guarantee an identical 429 on every remaining
+            # video and fill the queue with red — which is exactly what
+            # happened before this check existed.
+            print(f"[orchestrator] \U0001f6d1 Stopping run: {e}")
+            alerts.alert(
+                "Generation stopped — Gemini daily quota reached",
+                f"{successful} video(s) were generated before the free-tier quota ran out.\n\n"
+                f"{e}\n\nThe quota resets at midnight Pacific.",
+                severity="warn",
+            )
+            break
 
         except Exception as e:
+            if api_budget.is_quota_error(e):
+                budget.hard_stop(str(e)[:200])
+                print(f"[orchestrator] \U0001f6d1 Gemini quota exhausted — stopping the run.")
+                alerts.alert(
+                    "Generation stopped — Gemini daily quota reached",
+                    f"{successful} video(s) were generated before the free-tier quota ran out.\n\n"
+                    f"The quota resets at midnight Pacific. Lower 'Daily video generation batch' "
+                    f"in Settings to fit within it.",
+                    severity="warn",
+                )
+                break
+
             print(f"[orchestrator] \u2717 Video {i+1} failed: {e}")
             errors.append(f"{topic.get('name','?')}: {str(e)[:160]}")
             traceback.print_exc()

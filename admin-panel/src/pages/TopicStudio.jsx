@@ -5,6 +5,30 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { Plus, Edit2, Trash2, Check, Sparkles, Folder, Music2, ToggleLeft, ToggleRight } from 'lucide-react'
 
+
+// When a topic was created and where it came from. Without this there is no way
+// to tell a topic you added last month from one the synthesizer invented an
+// hour ago — which matters a lot once automatic rotation is inventing them.
+function topicAge(iso) {
+  const then = new Date(iso).getTime()
+  if (!then) return ''
+  const mins = Math.floor((Date.now() - then) / 60000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  const days = Math.floor(hrs / 24)
+  if (days < 30) return `${days}d ago`
+  return new Date(iso).toLocaleDateString()
+}
+
+const SOURCE_LABEL = {
+  'persona-auto': '\u2728 auto',
+  'trending-auto': '\u{1F525} trending',
+  'manual': 'you',
+  'system': 'seeded',
+}
+
 export default function TopicStudio() {
   const [activeTab, setActiveTab] = useState('topics') // 'topics' | 'tones'
   const [topics, setTopics] = useState([])
@@ -355,6 +379,16 @@ export default function TopicStudio() {
                     {item.name}
                   </h3>
                   <div className="flex gap-2">
+                    {item.created_at && (
+                      <span
+                        className="badge"
+                        title={new Date(item.created_at).toLocaleString()}
+                        style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)' }}
+                      >
+                        {topicAge(item.created_at)}
+                        {item.added_by ? ` \u00b7 ${SOURCE_LABEL[item.added_by] || item.added_by}` : ''}
+                      </span>
+                    )}
                     {item.category && (
                       <span className="badge" style={{ background: 'var(--bg-elevated)', color: 'var(--text-secondary)' }}>
                         {item.category}
