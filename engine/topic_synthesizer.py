@@ -36,6 +36,8 @@ from datetime import datetime, timezone
 from engine import personas as personas_mod
 from engine import concept_memory as cm
 from engine import lenses as lenses_mod
+from engine import api_budget
+from engine import daycycle
 
 MIN_POOL_SIZE = 15
 SYNTHESIZE_BATCH = 20
@@ -102,12 +104,28 @@ def _extract_json_array(text: str) -> list:
 
 
 def synthesize_topics(persona_key: str, n: int, existing_names: set, ledger: list,
-                      rotation_index: int = 0, api_key: str = None) -> list:
+                      rotation_index: int = 0, api_key: str = None, budget=None) -> list:
     """Asks Gemini for `n` new topic ideas inside a persona's domain.
 
-    Returns [] on any failure — the caller falls back to the persona's static
-    seed list, which always exists and always works. Nothing about "unlimited
-    topics" is allowed to become "zero topics" if a model call fails.
+    Returns [] on an ordinary failure — the caller falls back to the persona's
+    static seed list, which always exists and always works. Nothing about
+    "unlimited topics" is allowed to become "zero topics" because one model
+    call had a bad day.
+
+    BUT a quota error is RE-RAISED, not swallowed. This function used to
+    catch every exception including 429, which meant that when the daily
+    Gemini allowance was gone, topic invention did not report a quota problem
+    — it quietly returned [] and the caller silently filled the pool from the
+    seed list instead. From the dashboard that looked like "the AI has
+    stopped inventing topics" (a content problem) when it was actually "the
+    API key is out of quota" (an infrastructure problem). Two completely
+    different fixes, and the logs pointed at neither.
+
+    It is also now BUDGET-AWARE. This call is a real Gemini request, and it
+    used to be spent without ever being recorded in api_budget — so the
+    tracker structurally under-counted, thought it had more room than it did,
+    started videos it could not finish, and hit 429s the budget system existed
+    to prevent.
     """
     from engine.script_generator import _get_client, _call_model_with_clear_errors
 
@@ -145,9 +163,17 @@ ALREADY COVERED — do not repeat or closely rephrase any of these:
 
 Invent exactly {n} new topics, one per lens, in order."""
 
+    # Reserve BEFORE calling, spend AFTER — the same contract the video
+    # pipeline uses. One call buys up to 20 topics, which is the best-value
+    # request in the whole system; it just has to be counted.
+    if budget is not None:
+        budget.require(1, f"topic synthesis for '{persona_key}'")
+
     try:
         client, model_name = _get_client(api_key)
         response = _call_model_with_clear_errors(client, model_name, SYNTH_SYSTEM, user, temperature=1.0)
+        if budget is not None:
+            budget.spend(1)
         ideas = _extract_json_array(response.text)
         cleaned = [
             {"name": i["name"].strip(), "description": i.get("description", "").strip()}
@@ -155,13 +181,29 @@ Invent exactly {n} new topics, one per lens, in order."""
         ]
         print(f"[topic_synthesizer] \u2713 Proposed {len(cleaned)} new topic(s) for '{persona['label']}'")
         return cleaned
+    except api_budget.QuotaExhausted:
+        raise
     except Exception as e:
+        # A 429 that reached here means the call was actually made and
+        # rejected. Record the spend (it counted against Google's meter even
+        # though it returned nothing) and stop the run rather than papering
+        # over it with seed topics.
+        if api_budget.is_quota_error(e):
+            if budget is not None:
+                budget.spend(1)
+                budget.hard_stop(str(e)[:200])
+            raise api_budget.QuotaExhausted(
+                f"Gemini daily quota ran out during topic synthesis for "
+                f"'{persona_key}'. Topics were NOT invented this run.\n\n"
+                f"Refills in about {daycycle.humanize_until_reset()} (midnight Pacific)."
+            ) from e
         print(f"[topic_synthesizer] \u26a0 Could not synthesize topics ({e}); "
               f"falling back to seed topics for this persona.")
         return []
 
 
-def ensure_persona_topic_pool(persona_key: str, db, min_pool: int = MIN_POOL_SIZE, api_key: str = None) -> int:
+def ensure_persona_topic_pool(persona_key: str, db, min_pool: int = MIN_POOL_SIZE, api_key: str = None,
+                              budget=None) -> int:
     """Tops up a persona's unused topic pool if it has run low.
 
     "Unused" means an ACTIVE topic that has never produced a video row yet.
@@ -210,7 +252,8 @@ def ensure_persona_topic_pool(persona_key: str, db, min_pool: int = MIN_POOL_SIZ
         }
 
         rotation = datetime.now(timezone.utc).timetuple().tm_yday
-        ideas = synthesize_topics(persona_key, needed, all_topic_names, ledger, rotation, api_key=api_key)
+        ideas = synthesize_topics(persona_key, needed, all_topic_names, ledger, rotation,
+                                  api_key=api_key, budget=budget)
 
         # Track how many ideas actually came from Gemini vs the static seed
         # list, and TAG THEM DIFFERENTLY. Both used to be inserted under the
@@ -265,6 +308,10 @@ def ensure_persona_topic_pool(persona_key: str, db, min_pool: int = MIN_POOL_SIZ
                   f"all genuinely invented by Gemini.")
         return added
 
+    except api_budget.QuotaExhausted:
+        # Must escape. Swallowing this here would recreate the exact bug
+        # fixed inside synthesize_topics one level up the stack.
+        raise
     except Exception as e:
         print(f"[topic_synthesizer] \u26a0 Pool check failed for '{persona_key}': {e}")
         return 0
@@ -273,51 +320,85 @@ def ensure_persona_topic_pool(persona_key: str, db, min_pool: int = MIN_POOL_SIZ
 def resolve_active_personas(db) -> list:
     """Works out which personas should have topics invented for them.
 
-    Checks three sources in order. Relying only on the first one meant this
-    entire feature silently never ran for anyone who had not yet set up a
-    persona-backed channel — which was the real situation: a handful of old
-    topics, no personas anywhere, so the pool top-up did nothing and every
-    video was drawn from the same tiny stale list, producing duplicates.
+    BUGFIX — THIS IS WHY CHANNELS 2 AND 3 NEVER GOT TOPICS.
 
-      1. The `auto_topic_personas` setting — an explicit comma-separated list.
-         Highest priority because a person set it deliberately.
-      2. Personas attached to enabled channels.
-      3. Personas already referenced by existing topics.
+    This used to check three sources in strict priority order and RETURN AT
+    THE FIRST ONE THAT MATCHED, with the `auto_topic_personas` setting first
+    on the reasoning that "a person set it deliberately". Nobody had set it.
+    Migration 002 seeded it:
+
+        SELECT 'auto_topic_personas', 'tech_science_explainer'
+
+    So from the moment the database was created, source 1 always matched with
+    exactly one persona, and source 2 — personas attached to enabled channels
+    — became unreachable dead code. Adding a Comedy channel and a Tamil
+    Quotes channel on the Channels page had literally no effect on topic
+    invention, forever, with no error anywhere. The log line
+    "Using auto_topic_personas setting: ['tech_science_explainer']" was the
+    only symptom, and it read like correct behaviour.
+
+    NOW: sources are UNIONED, not raced.
+
+      - Any persona with an ENABLED channel always gets topics. That is what
+        enabling a channel means; a setting should not be able to silently
+        cancel it.
+      - The `auto_topic_personas` setting ADDS personas on top. It is still
+        useful — it is how you generate for a domain before its channel
+        exists — it just can no longer subtract.
+      - Personas referenced by existing topics are the last-resort fallback
+        for a database with neither channels nor a setting.
     """
-    try:
-        rows = db.table("settings").select("key, value").eq("key", "auto_topic_personas").execute().data or []
-        if rows and (rows[0].get("value") or "").strip():
-            keys = [k.strip() for k in rows[0]["value"].split(",") if k.strip()]
-            valid = [k for k in keys if personas_mod.get_persona(k)]
-            if valid:
-                print(f"[topic_synthesizer] Using auto_topic_personas setting: {valid}")
-                return valid
-    except Exception:
-        pass
+    selected, sources = {}, {}
 
+    # ── enabled channels (authoritative — cannot be overridden) ──────────
     try:
-        channels = db.table("channels").select("persona_key").eq("is_enabled", True).execute().data or []
-        from_channels = sorted({c["persona_key"] for c in channels if c.get("persona_key")})
-        if from_channels:
-            return from_channels
+        channels = db.table("channels").select("persona_key, name").eq("is_enabled", True).execute().data or []
+        for c in channels:
+            key = c.get("persona_key")
+            if key and personas_mod.get_persona(key):
+                selected[key] = True
+                sources[key] = f"channel '{c.get('name') or key}'"
     except Exception as e:
         print(f"[topic_synthesizer] \u26a0 Could not read channels: {e}")
 
+    # ── explicit setting (additive) ──────────────────────────────────────
     try:
-        topics = db.table("topics").select("persona_key").eq("is_active", True).execute().data or []
-        from_topics = sorted({t["persona_key"] for t in topics if t.get("persona_key")})
-        if from_topics:
-            return from_topics
+        rows = db.table("settings").select("key, value").eq("key", "auto_topic_personas").execute().data or []
+        if rows and (rows[0].get("value") or "").strip():
+            for k in rows[0]["value"].split(","):
+                k = k.strip()
+                if k and personas_mod.get_persona(k) and k not in selected:
+                    selected[k] = True
+                    sources[k] = "Settings"
     except Exception:
         pass
 
-    print("[topic_synthesizer] No personas configured anywhere \u2014 automatic topic "
-          "rotation is OFF. Pick a persona on the Channels page, or set "
-          "'auto_topic_personas' in Settings, to turn it on.")
-    return []
+    # ── last resort: whatever existing topics already point at ───────────
+    if not selected:
+        try:
+            topics = db.table("topics").select("persona_key").eq("is_active", True).execute().data or []
+            for t in topics:
+                key = t.get("persona_key")
+                if key and personas_mod.get_persona(key):
+                    selected[key] = True
+                    sources[key] = "existing topics"
+        except Exception:
+            pass
+
+    if not selected:
+        print("[topic_synthesizer] No personas configured anywhere \u2014 automatic topic "
+              "rotation is OFF. Pick a persona on the Channels page, or set "
+              "'auto_topic_personas' in Settings, to turn it on.")
+        return []
+
+    result = sorted(selected)
+    print(f"[topic_synthesizer] Inventing topics for {len(result)} persona(s):")
+    for key in result:
+        print(f"[topic_synthesizer]   - {key}  (from {sources[key]})")
+    return result
 
 
-def ensure_all_active_persona_pools(db, min_pool: int = MIN_POOL_SIZE) -> dict:
+def ensure_all_active_persona_pools(db, min_pool: int = MIN_POOL_SIZE, budget_factory=None) -> dict:
     """Tops up every persona that should be generating content.
 
     Uses each persona's OWN channel's Gemini key when one is set, so topic
@@ -332,7 +413,18 @@ def ensure_all_active_persona_pools(db, min_pool: int = MIN_POOL_SIZE) -> dict:
     for persona_key in resolve_active_personas(db):
         channel = next((c for c in channels if c.get("persona_key") == persona_key), None)
         api_key = channels_mod.gemini_key_for(channel) if channel else None
-        results[persona_key] = ensure_persona_topic_pool(persona_key, db, min_pool, api_key=api_key)
+        # Each persona spends against ITS OWN channel's budget, matching the
+        # key it actually uses. Counting a comedy-key call against the
+        # science key's meter would make per-channel keys pointless.
+        budget = budget_factory(persona_key) if budget_factory else None
+        try:
+            results[persona_key] = ensure_persona_topic_pool(
+                persona_key, db, min_pool, api_key=api_key, budget=budget)
+        except api_budget.QuotaExhausted as e:
+            # One persona running dry must not stop the others — they may be
+            # on entirely separate Gemini keys with quota to spare.
+            print(f"[topic_synthesizer] \u26a0 '{persona_key}' skipped: {e}")
+            results[persona_key] = 0
     return results
 
 

@@ -14,7 +14,9 @@ export default function SettingsPage() {
     auto_approve: 'false',
     default_render_style: 'stock_footage',
     gemini_temperature: '0.9',
-    auto_topic_personas: ''
+    auto_topic_personas: '',
+    videos_per_run: '1',
+    publish_min_gap_minutes: '0'
   })
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -167,9 +169,18 @@ export default function SettingsPage() {
               Valid keys: <code>tech_science_explainer</code>, <code>comedy_skits</code>,{' '}
               <code>top10_and_facts</code>, <code>what_if_physics</code>,{' '}
               <code>awareness_comedy</code>, <code>everyday_origins</code>,{' '}
-              <code>motivation_and_discipline</code>
+              <code>motivation_and_discipline</code>, <code>quotes_and_poetry</code>
               <br /><br />
-              Leave blank to fall back to whatever personas your Channels use.
+              <strong>Leave this blank.</strong> Every enabled channel already gets topics
+              invented for it automatically — this box only ADDS extra personas on top,
+              for domains that do not have a channel yet.
+              <br /><br />
+              <em>This box used to be able to silently switch channels off.</em> It was
+              seeded with a single value when your database was created, and the code
+              treated it as an override that beat everything else — so Comedy and Tamil
+              Quotes could never get topics no matter how they were configured on the
+              Channels page. It is now additive only: it can add personas, never remove
+              them.
             </div>
 
             <label className="form-label" style={{ marginTop: 16 }}>
@@ -218,13 +229,18 @@ export default function SettingsPage() {
                 onChange={e => setSettings({ ...settings, max_videos_daily: e.target.value })}
               />
               <div className="form-hint">
-                Number of video drafts attempted by GitHub Actions each night.
+                The most videos that may be made in one day, across all runs.
                 <br /><br />
                 <strong>This used to be capped at 6</strong>, copying YouTube's ~6 uploads/day
                 limit — the wrong limit to copy. Generation and publishing are separate steps
                 with separate limits: publishing is capped by YouTube (see Publish Per Run
                 below), but generation is capped by Gemini's free-tier quota, roughly 20
                 requests/day at ~2 requests per video — about <strong>8 videos/day</strong>.
+                <br /><br />
+                Generation runs 6 times a day and makes one video each time, so 6 is the
+                natural setting. The daily budget works out as: 6 videos x 2 requests, plus
+                1 request per channel for topic invention = about 15 of your ~20 free
+                requests.
                 <br /><br />
                 Setting this higher than the app can actually afford is safe: it stops itself
                 cleanly at whatever the day's remaining Gemini quota allows, rather than failing
@@ -242,7 +258,64 @@ export default function SettingsPage() {
                 value={settings.publish_per_run}
                 onChange={e => setSettings({ ...settings, publish_per_run: e.target.value })}
               />
-              <div className="form-hint">How many approved videos to upload per 30-min cron trigger (default 1).</div>
+              <div className="form-hint">
+                How many approved videos to upload each time the publish job wakes up.
+                <strong> Leave this at 1.</strong> The job wakes hourly but only actually
+                uploads when the spacing gap below has passed, so raising this just
+                re-creates the burst that spacing exists to prevent.
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <div className="form-group">
+              <label className="form-label">Videos Per Run</label>
+              <input
+                type="number"
+                className="form-input"
+                min="1"
+                max="3"
+                value={settings.videos_per_run}
+                onChange={e => setSettings({ ...settings, videos_per_run: e.target.value })}
+              />
+              <div className="form-hint">
+                How many videos one scheduled generation run may render.
+                <br /><br />
+                <strong>1 is the right answer on a free plan.</strong> Rendering is the
+                heaviest step in the whole pipeline — ffmpeg, text-to-speech and Whisper
+                captioning, all on a free shared runner. Two videos in one run doubles how
+                long that job holds the runner and doubles what you lose if it times out.
+                Six small runs recover from a failure far better than three big ones: lose
+                a run, lose one video.
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Minimum Gap Between Uploads (minutes)</label>
+              <input
+                type="number"
+                className="form-input"
+                min="0"
+                max="1440"
+                step="30"
+                value={settings.publish_min_gap_minutes}
+                onChange={e => setSettings({ ...settings, publish_min_gap_minutes: e.target.value })}
+              />
+              <div className="form-hint">
+                <strong>0 = work it out automatically</strong> from each channel's daily cap.
+                A cap of 4/day becomes one upload every 6 hours, 6/day becomes every 4 hours.
+                That is almost always what you want, which is why 0 is the default.
+                <br /><br />
+                <strong>Why spacing matters:</strong> before this existed, the publish job
+                uploaded every approved video the moment it found one. A channel capped at
+                4/day did not post 4 videos across the day — it posted all 4 inside the
+                first two hours and then went silent for twenty-two. Four Shorts released
+                minutes apart compete with each other for the same slice of impressions
+                instead of each getting its own window.
+                <br /><br />
+                Need something out immediately anyway? Use the <strong>Publish Now</strong>
+                {' '}button on the video in the Video Queue — it skips the gap entirely.
+              </div>
             </div>
           </div>
 

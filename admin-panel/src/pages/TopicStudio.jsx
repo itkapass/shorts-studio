@@ -3,6 +3,7 @@
 
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
+import ManualControls from '../components/ManualControls'
 import { Plus, Edit2, Trash2, Check, Sparkles, Folder, Music2, ToggleLeft, ToggleRight } from 'lucide-react'
 
 
@@ -171,6 +172,8 @@ export default function TopicStudio() {
           <Plus size={16} /> Add New {activeTab === 'topics' ? 'Topic' : 'Tone'}
         </button>
       </div>
+
+      <ManualControls compact />
 
       {/* Tabs */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 24 }}>

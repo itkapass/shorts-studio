@@ -2,11 +2,44 @@
 // Review & Approval Queue for generated Shorts drafts
 
 import { useState, useEffect } from 'react'
-import { supabase } from '../lib/supabase'
+import { supabase, getFunctionErrorMessage } from '../lib/supabase'
 import { 
   Film, Check, X, RefreshCw, Eye, Video, AlertCircle, 
-  ChevronDown, ChevronUp, Play, Pause, Trash2, Sparkles, Filter
+  ChevronDown, ChevronUp, Play, Pause, Trash2, Sparkles, Filter, Send, Loader2
 } from 'lucide-react'
+
+// "Publish Now" — the escape hatch from the spacing schedule.
+//
+// Approved videos are normally published on a spread-out cadence (one every
+// N hours, derived from the channel's daily cap) so a 4/day channel posts
+// across the whole day instead of dumping all four in the first two hours.
+// That is the right default for the robot and the wrong one for you when
+// something is time-sensitive: a reaction to today's news is worthless in
+// six hours.
+//
+// This marks THIS specific video as a queue-jumper and immediately starts
+// the publish workflow, so it goes out in about a minute regardless of when
+// the last upload was. The channel's daily cap still applies — pushing past
+// that returns a YouTube 403 that burns quota and helps nobody.
+async function publishNow(video, setBusy, setMsg) {
+  setBusy(video.id)
+  setMsg('')
+  try {
+    const { data, error } = await supabase.functions.invoke('trigger-workflow', {
+      body: { workflow: 'publish', job_id: video.job_id },
+    })
+    if (error || data?.error) {
+      setMsg('Could not publish now: ' + await getFunctionErrorMessage(
+        error, data, 'the trigger-workflow function is not reachable (see docs/11).'))
+      return
+    }
+    setMsg('Publishing now — it should be live on YouTube in a minute or two.')
+  } catch (e) {
+    setMsg('Could not publish now: ' + e.message)
+  } finally {
+    setBusy(null)
+  }
+}
 
 // Triggers the manual-export workflow for a video: the file, captions,
 // hashtags and a posting checklist get packaged into a downloadable zip, and
@@ -59,6 +92,8 @@ function isRecent(iso) {
 export default function VideoQueue() {
   const [videos, setVideos] = useState([])
   const [filter, setFilter] = useState('pending') // 'pending' | 'approved' | 'published' | 'all'
+  const [publishBusy, setPublishBusy] = useState(null)
+  const [publishMsg, setPublishMsg]   = useState('')
   // Content-format filter ("Dark Humour", "Unknown Facts"...) and your own
   // subject label ("office", "school"...). This is what actually answers
   // "show me science in one filter, comedy in another, office separate from
@@ -219,6 +254,16 @@ export default function VideoQueue() {
           </button>
         ))}
       </div>
+
+      {publishMsg && (
+        <div style={{
+          margin: '0 0 16px', padding: '10px 14px', borderRadius: 6, fontSize: '0.8rem',
+          background: 'rgba(45, 206, 137, 0.12)', color: 'var(--accent-green)',
+          border: '1px solid rgba(45, 206, 137, 0.3)',
+        }}>
+          {publishMsg}
+        </div>
+      )}
 
       {/* Content Format & Label filters — this is what actually separates
           "science" from "comedy" from "office" from "school" in the queue.
@@ -473,13 +518,25 @@ export default function VideoQueue() {
                         )}
 
                         {video.status === 'approved' && (
-                          <button 
-                            className="btn btn-ghost btn-sm"
-                            disabled={actionLoading[video.id]}
-                            onClick={() => updateStatus(video.id, 'pending')}
-                          >
-                            Move Back to Pending
-                          </button>
+                          <>
+                            <button
+                              className="btn btn-sm publish-now-btn"
+                              disabled={publishBusy === video.id}
+                              title="Skip the waiting period and upload this one immediately"
+                              onClick={() => publishNow(video, setPublishBusy, setPublishMsg)}
+                            >
+                              {publishBusy === video.id
+                                ? <><Loader2 size={14} className="spin" /> Starting…</>
+                                : <><Send size={14} /> Publish Now</>}
+                            </button>
+                            <button 
+                              className="btn btn-ghost btn-sm"
+                              disabled={actionLoading[video.id]}
+                              onClick={() => updateStatus(video.id, 'pending')}
+                            >
+                              Move Back to Pending
+                            </button>
+                          </>
                         )}
 
                         {video.status === 'published' && video.youtube_url && (

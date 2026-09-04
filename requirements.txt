@@ -69,3 +69,13 @@ python-dotenv>=1.0.0
 # Cloudflare R2 (S3-compatible). Only needed if you use R2 instead of
 # Supabase Storage — R2's free tier is 10 GB with no egress fees vs 1 GB.
 boto3>=1.34.0
+
+# ── Timezone data ──────────────────────────────────────────────────
+# Needed by engine/daycycle.py, which keys the Gemini daily-quota counter
+# on the PACIFIC date because that is when Google's allowance resets.
+# Linux (and the GitHub Actions runner) ships a system tz database, so this
+# is really here for Windows, where zoneinfo has no system source and
+# ZoneInfo("America/Los_Angeles") raises without it — which would silently
+# push the counter back onto a fixed offset and re-introduce the bug this
+# release exists to fix.
+tzdata>=2024.1

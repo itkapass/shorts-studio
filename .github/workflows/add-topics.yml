@@ -1,0 +1,87 @@
+name: Add Topics
+
+# ─────────────────────────────────────────────────────────────────
+# WORKFLOW 1 of 6: Add Topics
+#
+# Asks Gemini to invent brand-new topics for each of your channels and
+# saves them into Topic Studio. That is ALL it does — no storyboards,
+# no rendering, no uploading. Takes about a minute.
+#
+# WHY THIS IS ITS OWN WORKFLOW NOW
+# Topic invention used to be bolted onto the front of the generate run.
+# That meant you could not refill the idea pool without also spending
+# 2 Gemini requests per video and ~10 minutes of rendering — and if the
+# render half failed, the topics never got saved either. They are two
+# different jobs with two different costs, so they are now two buttons.
+#
+# COST: 1 Gemini request per channel. With 3 channels that is 3 of your
+# ~20 daily requests, and each request buys up to 20 topics.
+# ─────────────────────────────────────────────────────────────────
+
+on:
+  # Once a day, an hour after Gemini's allowance refills at midnight
+  # Pacific (07:00 UTC). Running it first means the day's video runs
+  # always have a full pool of fresh ideas to draw from.
+  #   07:30 UTC = 1:00 PM IST
+  schedule:
+    - cron: '30 7 * * *'
+
+  # Manual: Actions tab -> Add Topics -> Run workflow.
+  # Or press "Add Topics Now" on the dashboard.
+  workflow_dispatch:
+
+jobs:
+  topics:
+    name: Invent new topics
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Python packages
+        run: pip install -r requirements.txt
+
+      # No ffmpeg, no Whisper cache, no rendering. This is why the job
+      # finishes in a minute instead of ten.
+      - name: Invent topics for every enabled channel
+        env:
+          GEMINI_API_KEY:       ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL:         ${{ secrets.GEMINI_MODEL }}   # optional — leave the secret unset to use the code default
+          PEXELS_API_KEY:       ${{ secrets.PEXELS_API_KEY }}
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          # Cloudflare R2 (10 GB free, no egress fees). Leave these unset and
+          # the pipeline automatically falls back to Supabase Storage (1 GB).
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_PUBLIC_BASE: ${{ secrets.R2_PUBLIC_BASE }}
+          # Alerting. Optional, but without it every failure is silent.
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+          SUPABASE_ANON_KEY:    ${{ secrets.SUPABASE_ANON_KEY }}
+          OUTPUT_DIR:           /tmp/shorts_output
+          ASSETS_DIR:           assets
+        run: |
+          python -m engine.orchestrator --topics-only
+
+      - name: Alert on failure
+        if: failure()
+        uses: ./.github/actions/notify-failure
+        with:
+          workflow_name: "Add Topics"
+          telegram_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          telegram_chat: ${{ secrets.TELEGRAM_CHAT_ID }}

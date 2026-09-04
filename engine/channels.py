@@ -199,6 +199,85 @@ def published_today(channel_id, db=None) -> int:
         return 0
 
 
+def min_gap_minutes(channel: dict) -> int:
+    """The minimum spacing between two uploads on the same channel.
+
+    WHY THIS EXISTS
+
+    The publish workflow runs every 30 minutes and published one video every
+    time it found one approved. So a channel capped at 4 videos/day did not
+    post 4 videos across the day — it posted all 4 inside the first two
+    hours, then sat silent for twenty-two. That is bad on two counts:
+
+      1. AUDIENCE. Shorts are surfaced over hours, not minutes. Four uploads
+         inside two hours compete with each other for the same slice of
+         impressions instead of each getting its own window, and the channel
+         is invisible for the rest of the day.
+      2. PATTERN. A burst followed by total silence, every single day, is a
+         far more machine-looking signature than a steady cadence.
+
+    The gap is DERIVED from the daily cap rather than being another number to
+    keep in sync by hand — 4/day becomes one every 6 hours automatically. Set
+    `publish_min_gap_minutes` in Settings to override it explicitly.
+    """
+    override = _setting_int("publish_min_gap_minutes", 0)
+    if override > 0:
+        return override
+    cap = daily_cap_for(channel)
+    # A whole day divided by the cap. 4/day -> 360 min. 6/day -> 240 min.
+    return max(30, (24 * 60) // max(cap, 1))
+
+
+def _setting_int(key: str, default: int) -> int:
+    try:
+        rows = _db().table("settings").select("value").eq("key", key).execute().data or []
+        return int(rows[0]["value"]) if rows else default
+    except Exception:
+        return default
+
+
+def minutes_since_last_publish(channel_id, db=None):
+    """How long since this channel last published, in minutes.
+
+    Returns None if it has never published — which must be treated as
+    "go ahead", not "wait", or a brand-new channel would never start.
+    """
+    from datetime import datetime, timezone
+    try:
+        db = db or _db()
+        q = db.table("videos").select("published_at").eq("status", "published")
+        if channel_id:
+            q = q.eq("channel_id", channel_id)
+        rows = q.order("published_at", desc=True).limit(1).execute().data or []
+        if not rows or not rows[0].get("published_at"):
+            return None
+        last = rows[0]["published_at"].replace("Z", "+00:00")
+        last_dt = datetime.fromisoformat(last)
+        if last_dt.tzinfo is None:
+            last_dt = last_dt.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - last_dt).total_seconds() / 60.0
+    except Exception as e:
+        print(f"[channels] ⚠ Could not read last publish time: {e}")
+        return None
+
+
+def ready_to_publish(channel: dict, db=None) -> tuple:
+    """(is_ready, human_readable_reason). Checks spacing, not credentials."""
+    gap = min_gap_minutes(channel)
+    since = minutes_since_last_publish((channel or {}).get("id"), db=db)
+    if since is None:
+        return True, "no previous upload on this channel"
+    if since >= gap:
+        return True, f"last upload was {int(since)} min ago (gap is {gap} min)"
+    wait = int(gap - since)
+    hrs, mins = divmod(wait, 60)
+    pretty = f"{hrs}h {mins}m" if hrs else f"{mins}m"
+    return False, (
+        f"last upload was only {int(since)} min ago; this channel posts one "
+        f"every {gap} min. Next slot in {pretty}."
+    )
+
+
 def describe(channel: dict) -> str:
     cats = channel.get("categories") or []
     if isinstance(cats, str):
@@ -207,5 +286,6 @@ def describe(channel: dict) -> str:
         f"{channel.get('name')} "
         f"[{channel.get('publish_mode')}] "
         f"cap={daily_cap_for(channel)}/day "
+        f"every {min_gap_minutes(channel)}min "
         f"categories={', '.join(cats) or 'none'}"
     )

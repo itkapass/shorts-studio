@@ -1,17 +1,42 @@
 name: Publish Approved Videos
 
 # ─────────────────────────────────────────────────────────────────
-# WORKFLOW 2: Publish Videos
-# Runs every 30 minutes.
-# Picks the oldest "approved" video from Supabase and uploads it to YouTube.
-# Videos only get approved by you clicking "Approve" in the Admin Panel.
+# WORKFLOW 3 of 6: Publish Approved Videos
+#
+# Uploads ONE approved video to YouTube, if enough time has passed since
+# the last one. Videos only become "approved" when you press Approve in
+# the dashboard, so this can never publish something you have not seen.
 # ─────────────────────────────────────────────────────────────────
 
 on:
+  # Runs hourly, but does NOT publish hourly.
+  #
+  # The spacing is decided in code (engine/channels.py -> min_gap_minutes),
+  # derived from each channel's daily cap: a cap of 4/day becomes one upload
+  # every 6 hours. This job wakes up every hour, asks "has the gap passed?",
+  # and almost always answers no and exits in about 10 seconds.
+  #
+  # WHY IT USED TO BE WRONG: this ran every 30 minutes and published every
+  # approved video it found, with no gap check at all. So a channel capped
+  # at 4/day did not post 4 videos across the day — it posted all 4 inside
+  # the first two hours and then went silent for twenty-two. Four Shorts
+  # released minutes apart compete with each other for the same slice of
+  # impressions instead of each getting its own window, and a daily
+  # burst-then-silence pattern is a much more machine-looking signature
+  # than a steady cadence.
+  #
+  # Waking hourly rather than half-hourly halves the number of runs (24/day
+  # instead of 48) while costing you at most an hour of drift on a 6-hour
+  # gap — and the "Publish Now" button does not wait for the cron at all,
+  # it triggers this workflow immediately.
   schedule:
-    - cron: '*/30 * * * *'   # Every 30 minutes
+    - cron: '7 * * * *'   # Hourly, at 7 past — off the hour so it is not
+                          # queued alongside every other cron on GitHub.
 
-  workflow_dispatch:           # Allow manual trigger from GitHub Actions tab
+  # Manual: Actions tab -> Publish Approved Videos -> Run workflow.
+  # Or press "Publish Now" on a video in the dashboard, which marks that
+  # specific video as a queue-jumper and triggers this immediately.
+  workflow_dispatch:
 
 jobs:
   publish:

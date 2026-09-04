@@ -71,26 +71,45 @@ def run_publish_pipeline():
         for ch in all_channels:
             print(f"[publish]   - {channels_mod.describe(ch)}")
 
-    rows = (
+    # ── "Publish Now" queue jumpers first ────────────────────────────────
+    # A video with publish_now=true was chosen by a human, in the dashboard,
+    # seconds ago. It bypasses the spacing rules entirely: those exist to
+    # stop the ROBOT from bursting, and a deliberate button press is not a
+    # burst. Without this there was no way to say "post this one, now" short
+    # of editing the database.
+    forced = (
+        db.table("videos").select("*")
+        .eq("status", "approved").eq("publish_now", True)
+        .order("approved_at", desc=False).execute().data
+    ) or []
+
+    normal = (
         db.table("videos")
         .select("*")
         .eq("status", "approved")
+        .neq("publish_now", True)
         .order("approved_at", desc=False)  # Oldest first
         .limit(publish_per_run)
         .execute()
         .data
-    )
+    ) or []
+
+    rows = forced + normal
 
     if not rows:
         print("[publish] No approved videos to publish. Exiting.")
         return
 
+    if forced:
+        print(f"[publish] {len(forced)} video(s) marked PUBLISH NOW \u2014 skipping spacing rules for those.")
     print(f"[publish] Found {len(rows)} approved video(s). Publishing...")
     published_count = 0
 
     for row in rows:
         job_id = row["job_id"]
-        print(f"\n[publish] Publishing: '{row['title']}' (job_id: {job_id})")
+        is_forced = bool(row.get("publish_now"))
+        print(f"\n[publish] Publishing: '{row['title']}' (job_id: {job_id})"
+              + ("  [FORCED - Publish Now]" if is_forced else ""))
         tmp_path = None
 
         try:
@@ -114,8 +133,23 @@ def run_publish_pipeline():
                                    error="Channel is set to manual posting")
                     continue
 
+                # ── SPACING ──────────────────────────────────────────────
+                # Enforce a minimum gap between uploads so a 4/day cap means
+                # one every 6 hours, not four in the first two hours followed
+                # by twenty-two hours of silence. See channels.min_gap_minutes.
+                if not is_forced:
+                    ok, why = channels_mod.ready_to_publish(channel, db=db)
+                    if not ok:
+                        print(f"[publish] \u23f3 Holding '{row['title']}' \u2014 {why}")
+                        print(f"[publish]    (Use the 'Publish Now' button in the dashboard "
+                              f"to post it immediately anyway.)")
+                        continue
+
                 cap = channels_mod.daily_cap_for(channel)
                 sent = channels_mod.published_today(channel.get("id"), db=db)
+                # The daily cap is a YouTube-quota guardrail, so even a forced
+                # publish respects it — pushing past it returns a 403 that
+                # burns quota and helps nobody.
                 if sent >= cap:
                     # Stop BEFORE the API call. Pushing past the cap returns a
                     # 403 that also burns quota, so the next run starts even
@@ -170,6 +204,7 @@ def run_publish_pipeline():
                 "youtube_url":  result["url"],
                 "channel_id":   (channel or {}).get("id"),
                 "published_at": datetime.now(timezone.utc).isoformat(),
+                "publish_now":  False,   # clear the flag so it can't re-fire
             }).eq("id", row["id"]).execute()
 
             # Commit the concept to the permanent ledger only now, on the way
@@ -199,6 +234,12 @@ def run_publish_pipeline():
             # it is the one error worth interrupting someone about.
             if "invalid_grant" in str(e).lower() or "refresh token" in error_msg.lower():
                 alerts.youtube_auth_broken((channel or {}).get("name", "default"), error_msg)
+
+        else:
+            # Only one upload per run once spacing is on. Publishing two
+            # back to back would defeat the gap we just enforced.
+            if not is_forced and published_count >= publish_per_run:
+                break
 
         finally:
             if tmp_path and os.path.exists(tmp_path):

@@ -4,6 +4,7 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import ManualControls from '../components/ManualControls'
 import { 
   Film, 
   CheckCircle, 
@@ -85,6 +86,9 @@ export default function Dashboard() {
           <TrendingUp size={15} /> Refresh
         </button>
       </div>
+
+      {/* Manual "run it now" buttons — see components/ManualControls.jsx */}
+      <ManualControls />
 
       {/* Quick Actions Action Banner */}
       <div className="quick-actions-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16, marginBottom: 24 }}>

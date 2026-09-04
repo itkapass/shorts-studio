@@ -68,6 +68,7 @@ from engine import narrative
 from engine import personas as personas_mod
 from engine import topic_synthesizer
 from engine import api_budget
+from engine import daycycle
 from engine import brief as brief_mod
 from engine import channels as channels_mod
 from engine.styles import is_multi_voice
@@ -84,7 +85,8 @@ def get_supabase() -> Client:
 
 # ─── Core Pipeline ────────────────────────────────────────────────────────────
 
-def run_generation_pipeline(manual_count: int = None):
+def run_generation_pipeline(manual_count: int = None, skip_topics: bool = False,
+                            topics_only: bool = False):
     """Main entry point for generation.
 
     REWORKED FROM A SINGLE DAILY BATCH TO A SPREAD SCHEDULE.
@@ -131,9 +133,13 @@ def run_generation_pipeline(manual_count: int = None):
         print(f"[orchestrator] Manual run requested: generating {videos_this_run} now "
               f"(daily target of {daily_target} still applies to scheduled runs).")
     else:
+        try:
+            per_run = max(1, int(settings.get("videos_per_run") or PER_RUN_SPREAD_CAP))
+        except (TypeError, ValueError):
+            per_run = PER_RUN_SPREAD_CAP
         made_today = _count_videos_made_today(db)
         remaining_today = max(0, daily_target - made_today)
-        videos_this_run = min(remaining_today, PER_RUN_SPREAD_CAP)
+        videos_this_run = min(remaining_today, per_run)
         print(f"[orchestrator] Daily target {daily_target}, {made_today} made today already, "
               f"{remaining_today} remaining. This run will attempt {videos_this_run}.")
 
@@ -169,14 +175,50 @@ def run_generation_pipeline(manual_count: int = None):
     # and had to be deleted by hand.
     _expire_stale_render_jobs(db)
 
+    # One BudgetTracker per Gemini key actually in use this run, not one
+    # global tracker. Without this, giving a channel its own key would not
+    # help: every video would still increment the SAME shared counter, so
+    # three channels would still look like they share one 20/day pool even
+    # after being given three separate ones.
+    #
+    # MOVED UP (was defined below, after topic synthesis had already run).
+    # Topic synthesis makes real Gemini calls, so it has to be able to reserve
+    # and record them like everything else. While this helper was defined
+    # further down, synthesis spent unbudgeted calls first and the tracker
+    # started every run already wrong about how much room was left.
+    all_channels = channels_mod.load_channels(db=db)
+    budgets_by_key: dict = {}
+
+    def budget_for_persona(persona_key):
+        channel = next((c for c in all_channels if c.get("persona_key") == persona_key), None)
+        api_key = channels_mod.gemini_key_for(channel) if channel else None
+        key_id = (channel.get("env_suffix") or "default") if channel else "default"
+        if key_id not in budgets_by_key:
+            b = api_budget.BudgetTracker(db=db, daily_budget=api_budget.DEFAULT_DAILY_BUDGET, key_id=key_id)
+            b.load()
+            print(f"[orchestrator] Gemini budget for '{key_id}': {b.spent}/{b.daily_budget} used today.")
+            budgets_by_key[key_id] = b
+        return budgets_by_key[key_id], api_key
+
     # Top up any persona's topic pool that has run low, BEFORE loading topics
-    # for this run, so newly synthesized ones are immediately eligible. Only
-    # personas with a real enabled channel behind them get topics invented —
-    # no point generating videos for a domain nobody publishes to.
-    try:
-        topic_synthesizer.ensure_all_active_persona_pools(db)
-    except Exception as e:
-        print(f"[orchestrator] \u26a0 Persona topic pool check failed (continuing anyway): {e}")
+    # for this run, so newly synthesized ones are immediately eligible.
+    if skip_topics:
+        print("[orchestrator] Topic top-up skipped for this run (--skip-topics).")
+    else:
+        try:
+            topic_synthesizer.ensure_all_active_persona_pools(
+                db, budget_factory=lambda pk: budget_for_persona(pk)[0])
+        except Exception as e:
+            print(f"[orchestrator] \u26a0 Persona topic pool check failed (continuing anyway): {e}")
+
+    if topics_only:
+        # The "Add Topics" workflow stops here. Topic invention and video
+        # generation used to be welded into one run, which meant you could
+        # not refill the idea pool without also spending 2 Gemini calls per
+        # video and 10 minutes of rendering — and if generation failed, the
+        # topics never got added either.
+        print("[orchestrator] Topic top-up complete. Stopping here (--topics-only).")
+        return
 
     topics = db.table("topics").select("*").eq("is_active", True).execute().data
     tones = db.table("tones").select("*").eq("is_active", True).execute().data
@@ -226,14 +268,28 @@ def run_generation_pipeline(manual_count: int = None):
     affordable = _default_budget.remaining // max(cost_each, 1)
 
     if affordable < 1:
-        alerts.alert(
-            "Gemini daily quota is used up",
-            f"No videos generated: {budget.spent}/{budget.daily_budget} of today's "
-            f"Gemini free-tier requests are already spent.\n\n"
-            f"The quota resets at midnight Pacific. To fit more videos into it, "
-            f"lower 'Daily video generation batch' in Settings.",
-            severity="warn",
+        # BUGFIX: this used to read `budget.spent`, but the tracker built two
+        # lines above is called `_default_budget`; `budget` is only assigned
+        # much further down, INSIDE the video loop. Python marks a name local
+        # for the whole function the moment it is assigned anywhere in it, so
+        # reading it here raised UnboundLocalError — and it raised it inside
+        # the quota-exhausted branch, meaning the one situation this branch
+        # existed to report cleanly was the exact situation that crashed the
+        # workflow with exit code 1. Every red "Generate Video Drafts" run
+        # was this single wrong word.
+        msg = (
+            f"No videos generated: {_default_budget.spent}/{_default_budget.daily_budget} "
+            f"of today's Gemini free-tier requests are already spent.\n\n"
+            f"The allowance refills in about {daycycle.humanize_until_reset()} "
+            f"(midnight Pacific). To fit more videos into it, lower 'Daily video "
+            f"generation batch' in Settings, or give each channel its own Gemini "
+            f"key from a separate Google account (docs/10)."
         )
+        print(f"[orchestrator] {msg}")
+        alerts.alert("Gemini daily quota is used up", msg, severity="warn")
+        # Exit 0, not a crash. Running out of a free-tier allowance is an
+        # expected daily event, not a failure worth a red X in the Actions
+        # tab — red should mean "something is broken and needs you".
         return
 
     if affordable < videos_this_run:
@@ -248,25 +304,6 @@ def run_generation_pipeline(manual_count: int = None):
     successful, attempted = 0, 0
     gate_rejected, concept_rejected = 0, 0
     errors = []
-
-    # One BudgetTracker per Gemini key actually in use this run, not one
-    # global tracker. Without this, giving a channel its own key would not
-    # help: every video would still increment the SAME shared counter, so
-    # three channels would still look like they share one 20/day pool even
-    # after being given three separate ones.
-    all_channels = channels_mod.load_channels(db=db)
-    budgets_by_key: dict = {}
-
-    def budget_for_persona(persona_key):
-        channel = next((c for c in all_channels if c.get("persona_key") == persona_key), None)
-        api_key = channels_mod.gemini_key_for(channel) if channel else None
-        key_id = (channel.get("env_suffix") or "default") if channel else "default"
-        if key_id not in budgets_by_key:
-            b = api_budget.BudgetTracker(db=db, daily_budget=api_budget.DEFAULT_DAILY_BUDGET, key_id=key_id)
-            b.load()
-            print(f"[orchestrator] Gemini budget for '{key_id}': {b.spent}/{b.daily_budget} used today.")
-            budgets_by_key[key_id] = b
-        return budgets_by_key[key_id], api_key
 
     for i in range(videos_this_run):
         topic = topics[i % len(topics)]
@@ -408,7 +445,8 @@ def run_generation_pipeline(manual_count: int = None):
             _save_and_finalize(db, result, job_id, topic.get("id"), tone.get("id"), render_style,
                                 auto_approve=auto_approve, archetype=archetype,
                                 structure=structure, creative_brief=creative_brief,
-                                persona_key=persona_key)
+                                persona_key=persona_key,
+                                topic_label=topic.get("category") or None)
 
             # The concept is added to the in-memory ledger immediately so the
             # NEXT video in this same batch cannot duplicate it. It is only
@@ -627,7 +665,7 @@ def _load_settings(db: Client) -> dict:
 
 def _save_and_finalize(db, result, job_id, topic_id, tone_id, render_style, tone_name=None,
                        auto_approve=False, archetype=None, channel_id=None, structure=None,
-                       creative_brief=None, persona_key=None):
+                       creative_brief=None, persona_key=None, topic_label=None):
     """Saves the video row, uploads the rendered file to Storage (this used
     to only happen inside a separate GitHub Actions YAML step — see
     engine/storage.py's docstring), and flags likely near-duplicates instead
@@ -673,7 +711,14 @@ def _save_and_finalize(db, result, job_id, topic_id, tone_id, render_style, tone
         "pulse_context": (creative_brief or {}).get("_pulse_used") or None,
         "persona_key": persona_key,
         "category": archetype,          # content FORMAT — used by channels.py routing
-        "topic_label": topic.get("category") or None,  # YOUR grouping tag, e.g. "office"
+        # BUGFIX: this used to be `topic.get("category")`, but no variable
+        # named `topic` exists in this function — it receives `topic_id`, an
+        # integer. That is a NameError on EVERY video insert, raised only
+        # after the full render had already finished, so five minutes of
+        # compute was thrown away and the video never reached the queue.
+        # It stayed invisible because the quota bugs above stopped every run
+        # before it ever got as far as a successful render.
+        "topic_label": topic_label,  # YOUR grouping tag, e.g. "office"
         "channel_id": channel_id,
         "quality_verdict": gates.get("verdict"),
         "status": initial_status,
@@ -685,18 +730,33 @@ def _save_and_finalize(db, result, job_id, topic_id, tone_id, render_style, tone
     storage_module.upload_video(result["video_path"], job_id, db=db)
 
 
-PER_RUN_SPREAD_CAP = 2  # a single automatic run never generates more than this
+# A single automatic run never renders more than this many videos.
+#
+# ONE, not two. Rendering is by far the heaviest step in the pipeline —
+# ffmpeg, text-to-speech and Whisper captioning on a free shared runner —
+# and doing two in one job doubles how long that job holds a runner and
+# doubles what is thrown away if it times out. Six small runs recover from
+# a failure far better than three big ones: lose a run, lose one video.
+#
+# Override in Settings -> "Videos per run" if you have a paid Gemini key
+# and want to move faster.
+PER_RUN_SPREAD_CAP = 1
 
 
 def _count_videos_made_today(db) -> int:
     """How many videos have already been generated today, across every run.
 
     Persisted the same way as the Gemini budget counter: a settings row keyed
-    by UTC date, incremented after each success. This is what lets generation
-    be split across many small runs through the day instead of one big batch —
-    each run can tell how much of today's target is already done.
+    by the PACIFIC date, incremented after each success. This is what lets
+    generation be split across many small runs through the day instead of one
+    big batch — each run can tell how much of today's target is already done.
+
+    Keyed on the same day boundary as the Gemini budget on purpose: the two
+    numbers are compared against each other in the logs ("0 made today" vs
+    "20/20 spent"), and comparing counters that roll over at different times
+    is how the original bug hid for so long.
     """
-    key = f"videos_made_{datetime.now(timezone.utc).strftime('%Y_%m_%d')}"
+    key = f"videos_made_{daycycle.quota_day()}"
     try:
         rows = db.table("settings").select("value").eq("key", key).execute().data
         return int(rows[0]["value"]) if rows else 0
@@ -705,7 +765,7 @@ def _count_videos_made_today(db) -> int:
 
 
 def _increment_videos_made_today(db, by: int = 1):
-    key = f"videos_made_{datetime.now(timezone.utc).strftime('%Y_%m_%d')}"
+    key = f"videos_made_{daycycle.quota_day()}"
     try:
         existing = db.table("settings").select("key, value").eq("key", key).execute().data
         if existing:
@@ -810,9 +870,18 @@ if __name__ == "__main__":
     _p.add_argument("--count", type=int, default=None,
                      help="Generate this many videos right now, bypassing the "
                           "spread-across-the-day cap (a deliberate manual run).")
+    _p.add_argument("--topics-only", action="store_true",
+                     help="Only invent new topics, then stop. No storyboards, "
+                          "no rendering. Costs 1 Gemini call per persona.")
+    _p.add_argument("--skip-topics", action="store_true",
+                     help="Generate videos from the existing topic pool without "
+                          "inventing new ones. Saves Gemini calls.")
     _args, _ = _p.parse_known_args()
-    if _args.count is not None:
-        run_generation_pipeline(manual_count=_args.count)
+    if _args.topics_only:
+        run_generation_pipeline(topics_only=True)
+        raise SystemExit(0)
+    if _args.count is not None or _args.skip_topics:
+        run_generation_pipeline(manual_count=_args.count, skip_topics=_args.skip_topics)
         raise SystemExit(0)
     parser = argparse.ArgumentParser(description="AI Video Pipeline Orchestrator")
     parser.add_argument("--prompt", type=str, help="Generate AND render a custom video for a specific prompt (regenerates the storyboard from scratch)")

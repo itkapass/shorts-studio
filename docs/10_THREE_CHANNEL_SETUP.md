@@ -61,7 +61,20 @@ Same steps, but:
 
 ## Step 5: Give each channel its own free Gemini key (10 min, but this is the important one)
 
-**Why this matters:** Gemini's free tier is about 20 requests a day — but that limit is *per API key*, not per app. One shared key across 3 channels means they fight over the same 20. Three separate keys means each channel gets its own 20, for free.
+**Why this matters:** Gemini's free tier is about 20 requests a day — and that limit is **per Google Cloud project**, not per API key. One shared key across 3 channels means they fight over the same 20.
+
+> **Correction (this doc used to say "per API key" — that was wrong).**
+> Google's rate-limit docs state the limits are applied per project. Three API
+> keys created inside **one** Google account all belong to the same project and
+> share **one** 20/day pool, so making them would give you nothing and tell you
+> nothing — no error, no warning, just the same quota running out as before.
+>
+> The instructions below still work, because they tell you to use three
+> *separate Google accounts*, and separate accounts mean separate projects. Only
+> the explanation was wrong. Just do not shortcut it by making three keys in one
+> account.
+
+Three keys from three separate Google accounts means each channel gets its own 20, for free.
 
 ### Get 3 free keys
 
@@ -164,8 +177,10 @@ That's it. You don't need to add topics by hand anymore on any of the 3 channels
 
 | Problem | What to check |
 |---|---|
-| Nothing generates | Actions → Generate Video Drafts → open the log, read the printed lines |
-| Videos feel repetitive | Topic Studio → are topics mostly 🌱 not ✨? That means Gemini quota is out — set up per-channel keys (Step 5) |
+| Nothing generates | Actions → Generate Video Drafts → open the log, read the last 10 lines. See docs/12 for what each error means. |
+| Only one channel gets topics | Fixed in this release. Make sure Settings → Automatic Topic Rotation is **blank**, and run migration 003. |
+| All videos publish at once | Fixed in this release — uploads are now spaced from each channel's daily cap. See docs/11. |
+| Videos feel repetitive | Topic Studio → are topics mostly 🌱 not ✨? That used to be ambiguous. Quota errors during topic invention are now reported properly instead of quietly falling back to seed topics, so check the **Add Topics** workflow log — it will say plainly whether quota was the cause. |
 | Tamil text shows boxes/squares | Make sure you copied the whole `assets/fonts/` folder, including `NotoSansTamil-Bold.ttf` |
 | No alerts arrive | Run the **Test Alerts** workflow — it will tell you plainly what's missing |
 | A channel isn't publishing | Check its Publishing mode is **Automatic**, not Manual, and that its YouTube secrets exist for its suffix |

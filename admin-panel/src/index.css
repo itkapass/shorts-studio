@@ -739,3 +739,27 @@ tr:hover td { background: var(--bg-elevated); }
 .empty { text-align: center; padding: 3rem 1rem; color: var(--text-dim, #7c8394); }
 .btn.sm { padding: 0.32rem 0.65rem; font-size: 0.8rem; }
 .btn.danger { color: #e46b6b; border-color: rgba(220,70,70,0.4); }
+
+/* ── Manual control buttons ──────────────────────────────────────────────
+   Added for the "Run something now" panel. The .spin class animates the
+   loading icon while a GitHub Actions run is being started. */
+.spin { animation: spin 1s linear infinite; }
+
+.publish-now-btn {
+  background: rgba(45, 206, 137, 0.12);
+  border: 1px solid rgba(45, 206, 137, 0.35);
+  color: var(--accent-green);
+}
+.publish-now-btn:hover:not(:disabled) { background: rgba(45, 206, 137, 0.22); }
+
+.schedule-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.7rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}

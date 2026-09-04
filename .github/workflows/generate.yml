@@ -1,38 +1,62 @@
 name: Generate Video Drafts
 
 # ─────────────────────────────────────────────────────────────────
-# WORKFLOW 1: Generate Videos
-# Runs daily at 2:00 AM UTC (7:30 AM IST).
-# Generates up to 5 video drafts and queues them in Supabase.
-# Videos won't publish until you approve them in the Admin Panel.
+# WORKFLOW 2 of 6: Generate Video Drafts
+#
+# Writes ONE video and renders it, then stops. Runs 6 times a day.
+# The finished draft waits in your Video Queue until you approve it.
+# Nothing here ever touches YouTube.
 # ─────────────────────────────────────────────────────────────────
 
 on:
-  # Every 2 hours instead of one big batch at 2 AM.
+  # SIX RUNS A DAY, ONE VIDEO EACH — and all six inside a single Gemini
+  # quota day.
   #
-  # A single run generating the whole day's videos at once is exactly the
-  # pattern YouTube's automation/mass-produced-content detection watches
-  # for, and it fails all-or-nothing if the Gemini quota runs out partway
-  # through. Spreading it out means: uploads look organic rather than
-  # dumped, and a quota problem in one run only costs that run's 1-2
-  # videos, not the whole day.
+  # Gemini's free daily allowance resets at MIDNIGHT PACIFIC, which is
+  # 07:00 UTC. The old schedule ran every 2 hours around the clock, so the
+  # runs at 00:00, 02:00, 04:00 and 06:00 UTC were still inside Google's
+  # PREVIOUS day and were spending an allowance that was already gone.
+  # They got 429s, which pinned the internal counter to "full" for the
+  # rest of the day — so the later runs, which had a completely fresh
+  # quota available, refused to run. Zero videos, every day.
   #
-  # Each run only tops up toward the daily target (Settings -> Daily video
-  # generation batch) rather than trying to hit it in one shot, so most
-  # runs after the target is met simply do nothing — that is normal.
+  # These six times all sit between 01:00 and 16:00 Pacific, safely inside
+  # one quota day, starting an hour after it refills.
+  #
+  #   08:00 UTC = 01:30 PM IST      17:00 UTC = 10:30 PM IST
+  #   11:00 UTC = 04:30 PM IST      20:00 UTC = 01:30 AM IST
+  #   14:00 UTC = 07:30 PM IST      23:00 UTC = 04:30 AM IST
+  #
+  # (Generation time does not affect your audience — only PUBLISH time
+  # does, and that is a separate workflow with its own schedule.)
+  #
+  # Budget maths, against a free key's ~20 requests/day:
+  #   6 videos x 2 requests (creative brief + storyboard) = 12
+  #   3 personas x 1 request for topic top-up             =  3
+  #   -------------------------------------------------------
+  #                                                  total  15  of 20
   schedule:
-    - cron: '0 */2 * * *'
+    - cron: '0 8,11,14,17,20,23 * * *'
 
   # Manual trigger from the Actions tab. Leave "how many" blank for the
   # normal automatic behaviour (top up toward today's target). Fill it in
   # to generate a specific number right now regardless of the daily target
   # — e.g. to backfill after a quiet day, or to test a change immediately.
+  # ── MANUAL "make me a video right now" ─────────────────────────────
+  # Actions tab -> Generate Video Drafts -> Run workflow. Or press the
+  # "Generate Video Now" button on the dashboard, which triggers this
+  # same thing.
   workflow_dispatch:
     inputs:
       manual_count:
         description: "How many videos to generate right now (blank = automatic)"
         required: false
         default: ""
+      skip_topics:
+        description: "Skip inventing new topics (saves Gemini requests)"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -103,10 +127,14 @@ jobs:
           OUTPUT_DIR:           /tmp/shorts_output
           ASSETS_DIR:           assets
         run: |
+          ARGS=""
+          if [ "${{ inputs.skip_topics }}" = "true" ]; then
+            ARGS="$ARGS --skip-topics"
+          fi
           if [ -n "${{ inputs.manual_count }}" ]; then
-            python -m engine.orchestrator --count "${{ inputs.manual_count }}"
+            python -m engine.orchestrator --count "${{ inputs.manual_count }}" $ARGS
           else
-            python -m engine.orchestrator
+            python -m engine.orchestrator $ARGS
           fi
 
       # ── 7. Safety net: retry-upload anything that didn't already upload ──
