@@ -54,6 +54,8 @@ jobs:
       - name: Invent topics for every enabled channel
         env:
           GEMINI_API_KEY:       ${{ secrets.GEMINI_API_KEY }}
+          # Optional free backup when Gemini's daily quota is gone — see docs/13.
+          GROQ_API_KEY:         ${{ secrets.GROQ_API_KEY }}
           GEMINI_MODEL:         ${{ secrets.GEMINI_MODEL }}   # optional — leave the secret unset to use the code default
           PEXELS_API_KEY:       ${{ secrets.PEXELS_API_KEY }}
           SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}

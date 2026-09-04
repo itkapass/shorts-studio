@@ -69,6 +69,7 @@ from engine import personas as personas_mod
 from engine import topic_synthesizer
 from engine import api_budget
 from engine import daycycle
+from engine import step_summary
 from engine import brief as brief_mod
 from engine import channels as channels_mod
 from engine.styles import is_multi_voice
@@ -202,11 +203,12 @@ def run_generation_pipeline(manual_count: int = None, skip_topics: bool = False,
 
     # Top up any persona's topic pool that has run low, BEFORE loading topics
     # for this run, so newly synthesized ones are immediately eligible.
+    topic_results = {}
     if skip_topics:
         print("[orchestrator] Topic top-up skipped for this run (--skip-topics).")
     else:
         try:
-            topic_synthesizer.ensure_all_active_persona_pools(
+            topic_results = topic_synthesizer.ensure_all_active_persona_pools(
                 db, budget_factory=lambda pk: budget_for_persona(pk)[0])
         except Exception as e:
             print(f"[orchestrator] \u26a0 Persona topic pool check failed (continuing anyway): {e}")
@@ -218,6 +220,21 @@ def run_generation_pipeline(manual_count: int = None, skip_topics: bool = False,
         # video and 10 minutes of rendering — and if generation failed, the
         # topics never got added either.
         print("[orchestrator] Topic top-up complete. Stopping here (--topics-only).")
+        # Writes exactly which topics got added, for which channel, from
+        # which model, onto THIS run's Summary tab — see engine/step_summary.py.
+        # This is the direct answer to "how do I know what got added and
+        # what they are" without opening the dashboard.
+        step_summary.topics_added(topic_results)
+        total_added = sum(r.get("added", 0) for r in topic_results.values())
+        if total_added:
+            alerts.alert(
+                f"{total_added} new topic(s) added",
+                "\n".join(
+                    f"- {r.get('label', k)}: {r.get('added', 0)} added"
+                    for k, r in topic_results.items() if r.get("added")
+                ),
+                severity="info", force=True,
+            )
         return
 
     topics = db.table("topics").select("*").eq("is_active", True).execute().data
@@ -458,8 +475,31 @@ def run_generation_pipeline(manual_count: int = None, skip_topics: bool = False,
             budget.spend(cost_each)
             _increment_videos_made_today(db)
             successful += 1
+            provider = (result.get("storyboard") or {}).get("_provider", "gemini")
             print(f"[orchestrator] \u2713 Video {i+1} queued for review: {result['video_path']} "
-                  f"(Gemini budget: {budget.spent}/{budget.daily_budget})")
+                  f"(Gemini budget: {budget.spent}/{budget.daily_budget}, "
+                  f"written by: {provider})")
+
+            # Writes exactly what got made — title, channel, format, and
+            # which AI actually wrote it — right onto this run's Summary
+            # tab. Same "how do I know" answer as the topics step above,
+            # for the other half of the pipeline.
+            step_summary.video_generated(
+                title=result.get("title", "?"),
+                persona_label=(persona or {}).get("label", persona_key or "no persona"),
+                style=render_style, archetype=archetype, provider=provider,
+                job_id=job_id, quality_verdict=(result.get("quality") or {}).get("verdict"),
+                voice_engine=(result.get("storyboard") or {}).get("_voice_engine"),
+            )
+            alerts.alert(
+                f"New video ready for review: {result.get('title', '?')}",
+                f"Channel: {(persona or {}).get('label', persona_key or 'none')}\n"
+                f"Style: {render_style} · Format: {archetype or 'n/a'}\n"
+                f"Written by: {provider}"
+                + ("  (Groq backup — Gemini's daily quota was gone)" if provider == "groq" else "")
+                + f"\nJob ID: {job_id}\n\nOpen the Video Queue -> Pending Review to approve it.",
+                severity="info", force=True,
+            )
 
         except api_budget.QuotaExhausted as e:
             # A quota error is a per-DAY condition, not a per-video one.
@@ -603,6 +643,11 @@ def _render_pipeline(
             output_dir=job_output_dir, job_id=job_id,
         )
     total_duration = voice_result["duration_seconds"]
+    # Honest tag: which TTS engine actually spoke this video. edge-tts gives
+    # exact per-word timing; its fallbacks (Piper, gTTS) estimate it. This
+    # rides through to quality_gates (flags a "warn" for review) and the
+    # dashboard, the same way _provider tags which AI wrote the script.
+    storyboard["_voice_engine"] = voice_result.get("engine", "unknown")
 
     scenes_with_times = get_scene_timestamps(voice_result["word_timestamps"], storyboard["scenes"])
 

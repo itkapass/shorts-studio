@@ -115,6 +115,58 @@ def discover(limit_per_archetype: int = 1, archetypes: list = None) -> list:
     return candidates
 
 
+def topic_inspiration(persona_key: str, limit: int = 5) -> list:
+    """Real, currently-rising video titles in a persona's own archetype space
+    — returned as INSPIRATION TEXT for topic_synthesizer's prompt, never as
+    a topic to insert directly.
+
+    THIS IS THE DELIBERATE ALTERNATIVE TO auto_add(). auto_add() takes a
+    trending title and inserts it AS a topic — someone else's video title
+    becomes your topic name. That is the exact "another list to read from"
+    pattern this project's own philosophy warns against (see
+    PROJECT_HANDOFF.md's "actual reason for this architecture" section):
+    it skips lenses, skips the five-angle brief, skips every reasoning step
+    that makes a topic THIS app's own idea rather than a copy of someone
+    else's title.
+
+    This function does something narrower and safer: it hands
+    topic_synthesizer a short list of real titles doing well right now, the
+    same way pulse.py hands brief.py real headlines. The model still has to
+    invent its own specific topic, through the same lens-forced, avoid-list
+    reasoning as any other run. Trending informs; it never decides.
+
+    Returns [] (never raises) if YOUTUBE_API_KEY is not set or any search
+    fails — trending inspiration is a nice-to-have layered on top of a
+    system that already works without it, not a new dependency it needs.
+    """
+    api_key = get("YOUTUBE_API_KEY")
+    if not api_key:
+        return []
+
+    from engine import personas as personas_mod
+    persona = personas_mod.get_persona(persona_key)
+    if not persona:
+        return []
+
+    archetypes = persona.get("preferred_archetypes") or []
+    comedic = any(a in arch.COMEDIC_ARCHETYPES for a in archetypes)
+
+    titles = []
+    for a in archetypes:
+        for query in SEED_QUERIES.get(a, [])[:1]:  # one query per archetype is enough for inspiration
+            try:
+                results = _search_youtube(query, api_key, max_results=4)
+            except Exception as e:
+                print(f"[trending] \u26a0 Inspiration search failed for {query!r}: {e}")
+                continue
+            safe = [r["title"] for r in results if pulse._is_safe(r["title"], comedic)]
+            titles.extend(safe)
+        if len(titles) >= limit:
+            break
+
+    return titles[:limit]
+
+
 def auto_add(limit: int = 2, dry_run: bool = False) -> list:
     """Adds the best candidates as new active topics.
 

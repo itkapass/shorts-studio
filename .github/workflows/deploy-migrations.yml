@@ -1,0 +1,74 @@
+name: Deploy Database Migrations
+
+# ─────────────────────────────────────────────────────────────────
+# WORKFLOW: Deploy Database Migrations
+#
+# Runs the Supabase CLI's own migration tool against your real database
+# whenever a new file appears under supabase/migrations/. This is what
+# removes the "now paste this SQL into the Supabase SQL Editor" step
+# from every future update — from here on, a migration file that is
+# committed and pushed is a migration that is already applied.
+#
+# WHY THIS EXISTS
+# Every update to this project that changes the database used to end with
+# an instruction to open Supabase, open the SQL Editor, paste a file, and
+# press Run. That is a fine one-time step. It is a bad RECURRING one: it
+# needs you to remember it, every time, forever, and the one time it is
+# forgotten, new code silently expects a column or setting that was never
+# created — which is exactly the "publish_now column does not exist" class
+# of error this project has already hit once.
+#
+# The Supabase CLI tracks which migration files have already been applied
+# to your database (in a supabase_migrations schema it manages itself), so
+# running this on every push is always safe: files it has already seen are
+# skipped, and only genuinely new ones are applied. This is also why the
+# migration files in this project are written to be idempotent (IF NOT
+# EXISTS, WHERE NOT EXISTS guards) — belt AND suspenders.
+# ─────────────────────────────────────────────────────────────────
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/migrations/**'
+  # Actions tab -> Deploy Database Migrations -> Run workflow.
+  # Useful the first time you set this up, to apply anything already
+  # sitting in the folder without needing an empty commit.
+  workflow_dispatch:
+
+jobs:
+  migrate:
+    name: Apply pending migrations
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      # Non-interactive on purpose: GitHub Actions runners have no TTY, and
+      # some CLI versions still print a confirmation prompt anyway (a known
+      # CLI quirk, not specific to this project) which would otherwise hang
+      # the job until its timeout. Piping "yes" answers that prompt safely
+      # even when it doesn't appear, and does nothing harmful when it does.
+      - name: Link project and apply migrations
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: |
+          supabase link --project-ref ${{ secrets.SUPABASE_PROJECT_REF }}
+          yes | supabase db push
+
+      # Fires even if the CLI itself failed to install or link.
+      - name: Alert on failure
+        if: failure()
+        uses: ./.github/actions/notify-failure
+        with:
+          workflow_name: "Deploy Database Migrations"
+          telegram_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          telegram_chat: ${{ secrets.TELEGRAM_CHAT_ID }}

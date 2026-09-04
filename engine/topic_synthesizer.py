@@ -150,12 +150,32 @@ def synthesize_topics(persona_key: str, n: int, existing_names: set, ledger: lis
     house_rules = persona.get("flavor_instructions", "")
     rules_block = f"\nHOUSE RULES FOR THIS DOMAIN:\n{house_rules}\n" if house_rules else ""
 
+    # Real videos doing well right now, in this persona's own archetype
+    # space — INSPIRATION for angle and framing, never a topic to rename or
+    # copy. The model still has to invent its own specific idea through
+    # every lens below; this just tells it what kind of thing is landing
+    # with an audience at the moment. Best-effort and silent on failure —
+    # see trending.topic_inspiration for why this must never block or
+    # degrade ordinary topic invention.
+    trending_block = ""
+    try:
+        from engine import trending as trending_mod
+        rising = trending_mod.topic_inspiration(persona_key)
+        if rising:
+            trending_block = (
+                "\nREAL VIDEOS GETTING VIEWS RIGHT NOW IN THIS SPACE (inspiration for ANGLE "
+                "and FRAMING ONLY — invent your own specific topic; do not rename or lightly "
+                "reword any of these):\n" + "\n".join(f"- {t}" for t in rising) + "\n"
+            )
+    except Exception as e:
+        print(f"[topic_synthesizer] \u26a0 Trending inspiration skipped ({e}); continuing without it.")
+
     user = f"""DOMAIN: {persona['label']}
 {persona['description']}
 {rules_block}
 EXAMPLES OF THE DOMAIN'S SHAPE (do not repeat these, invent NEW ones like them):
 {chr(10).join('- ' + s for s in persona['seed_topics'])}
-
+{trending_block}
 ALREADY COVERED — do not repeat or closely rephrase any of these:
 {avoid_text}
 
@@ -175,11 +195,18 @@ Invent exactly {n} new topics, one per lens, in order."""
         if budget is not None:
             budget.spend(1)
         ideas = _extract_json_array(response.text)
+        # `_provider` rides along on each idea so the insert step below can
+        # tag it honestly (persona-auto vs persona-auto-groq) instead of
+        # collapsing "genuinely AI-invented" into one badge regardless of
+        # WHICH model did the inventing.
         cleaned = [
-            {"name": i["name"].strip(), "description": i.get("description", "").strip()}
+            {"name": i["name"].strip(), "description": i.get("description", "").strip(),
+             "_provider": response.provider}
             for i in ideas if i.get("name")
         ]
-        print(f"[topic_synthesizer] \u2713 Proposed {len(cleaned)} new topic(s) for '{persona['label']}'")
+        provider_note = " (via the Groq backup — Gemini's daily quota was gone)" if response.provider != "gemini" else ""
+        print(f"[topic_synthesizer] \u2713 Proposed {len(cleaned)} new topic(s) for "
+              f"'{persona['label']}'{provider_note}")
         return cleaned
     except api_budget.QuotaExhausted:
         raise
@@ -202,8 +229,20 @@ Invent exactly {n} new topics, one per lens, in order."""
         return []
 
 
+def _no_op_result(persona_key: str, added: int = 0) -> dict:
+    """The shared shape for 'nothing happened' returns, so every caller —
+    the step-summary writer included — can rely on ensure_persona_topic_pool
+    ALWAYS returning this dict shape, never a bare int for some paths and a
+    dict for others."""
+    persona = personas_mod.get_persona(persona_key)
+    return {
+        "persona": persona_key, "label": (persona or {}).get("label", persona_key),
+        "added": added, "from_gemini": 0, "from_groq": 0, "from_seed": 0, "topics": [],
+    }
+
+
 def ensure_persona_topic_pool(persona_key: str, db, min_pool: int = MIN_POOL_SIZE, api_key: str = None,
-                              budget=None) -> int:
+                              budget=None) -> dict:
     """Tops up a persona's unused topic pool if it has run low.
 
     "Unused" means an ACTIVE topic that has never produced a video row yet.
@@ -215,12 +254,15 @@ def ensure_persona_topic_pool(persona_key: str, db, min_pool: int = MIN_POOL_SIZ
     a topic is spent the moment it produces anything, so each new video
     reaches for a genuinely new subject.
 
-    Returns how many new topics were added (0 is normal, not a failure — it
-    just means the pool was already deep enough).
+    Returns a dict: {added, from_gemini, from_groq, from_seed, topics: [...]}.
+    added=0 is normal, not a failure — it just means the pool was already
+    deep enough. Always this same shape (never a bare int) so callers — the
+    GitHub Actions step-summary writer in particular — never have to guess
+    which kind of value they got back.
     """
     persona = personas_mod.get_persona(persona_key)
     if not persona:
-        return 0
+        return _no_op_result(persona_key)
 
     try:
         active = (
@@ -239,7 +281,7 @@ def ensure_persona_topic_pool(persona_key: str, db, min_pool: int = MIN_POOL_SIZ
         unused = [t for t in active if t["id"] not in used_topic_ids]
 
         if len(unused) >= min_pool:
-            return 0
+            return _no_op_result(persona_key)
 
         needed = min(min_pool - len(unused), SYNTHESIZE_BATCH)
         print(f"[topic_synthesizer] Pool for '{persona['label']}' is at "
@@ -276,37 +318,68 @@ def ensure_persona_topic_pool(persona_key: str, db, min_pool: int = MIN_POOL_SIZ
 
         added = 0
         added_from_gemini = 0
+        added_from_groq = 0
+        added_names = []   # for the GitHub Actions step summary / Telegram digest
         for idx, idea in enumerate(ideas[:needed]):
             key = idea["name"].strip().lower()
             if key in all_topic_names:
                 continue
             # Anything past index `gemini_invented_count` is a seed-fallback
-            # insertion, not a real Gemini invention — label it honestly.
+            # insertion, not a real model invention — label it honestly.
+            # Anything BEFORE it came from a real model call, but which one?
+            # `_provider` (set in synthesize_topics) tells us — a topic
+            # invented by the Groq backup is just as genuinely new as one
+            # from Gemini, but it did not come from the primary model, and
+            # this project's whole philosophy is to never blur that
+            # distinction behind a single ambiguous badge.
             is_real = idx < gemini_invented_count
+            from_groq = is_real and idea.get("_provider") == "groq"
+            if is_real:
+                added_by = "persona-auto-groq" if from_groq else "persona-auto"
+            else:
+                added_by = "persona-seed-fallback"
             try:
                 db.table("topics").insert({
                     "name": idea["name"],
                     "description": idea.get("description") or "",
                     "persona_key": persona_key,
                     "is_active": True,
-                    "added_by": "persona-auto" if is_real else "persona-seed-fallback",
+                    "added_by": added_by,
                 }).execute()
                 all_topic_names.add(key)
                 added += 1
-                added_from_gemini += 1 if is_real else 0
+                added_from_gemini += 1 if (is_real and not from_groq) else 0
+                added_from_groq += 1 if from_groq else 0
+                added_names.append({
+                    "name": idea["name"],
+                    "source": "groq" if from_groq else ("gemini" if is_real else "seed"),
+                })
             except Exception as e:
                 print(f"[topic_synthesizer] \u26a0 Could not insert topic {idea['name']!r}: {e}")
 
-        if added_from_gemini < added:
+        seed_count = added - added_from_gemini - added_from_groq
+        if added_from_groq:
+            print(f"[topic_synthesizer] \u2713 Added {added} topic(s) to '{persona['label']}' "
+                  f"({added_from_gemini} from Gemini, {added_from_groq} from the Groq backup "
+                  f"because Gemini's daily quota was gone, {seed_count} from the seed list).")
+        elif seed_count:
             print(f"[topic_synthesizer] \u2713 Added {added} topic(s) to '{persona['label']}' "
                   f"({added_from_gemini} genuinely new from Gemini, "
-                  f"{added - added_from_gemini} filled in from the seed list because "
+                  f"{seed_count} filled in from the seed list because "
                   f"Gemini synthesis did not return enough — check the Gemini budget log "
                   f"above if this keeps happening).")
         else:
             print(f"[topic_synthesizer] \u2713 Added {added} topic(s) to '{persona['label']}', "
                   f"all genuinely invented by Gemini.")
-        return added
+
+        # Returning a dict (not a bare int) is what lets the workflow print a
+        # real "here is exactly what got added" summary instead of just a
+        # count — see the Add Topics workflow's step-summary step.
+        return {
+            "persona": persona_key, "label": persona["label"], "added": added,
+            "from_gemini": added_from_gemini, "from_groq": added_from_groq,
+            "from_seed": seed_count, "topics": added_names,
+        }
 
     except api_budget.QuotaExhausted:
         # Must escape. Swallowing this here would recreate the exact bug
@@ -314,7 +387,7 @@ def ensure_persona_topic_pool(persona_key: str, db, min_pool: int = MIN_POOL_SIZ
         raise
     except Exception as e:
         print(f"[topic_synthesizer] \u26a0 Pool check failed for '{persona_key}': {e}")
-        return 0
+        return _no_op_result(persona_key)
 
 
 def resolve_active_personas(db) -> list:
@@ -424,7 +497,7 @@ def ensure_all_active_persona_pools(db, min_pool: int = MIN_POOL_SIZE, budget_fa
             # One persona running dry must not stop the others — they may be
             # on entirely separate Gemini keys with quota to spare.
             print(f"[topic_synthesizer] \u26a0 '{persona_key}' skipped: {e}")
-            results[persona_key] = 0
+            results[persona_key] = _no_op_result(persona_key)
     return results
 
 

@@ -414,6 +414,29 @@ export default function VideoQueue() {
                             🎨 {video.render_style.replace(/_/g, ' ')}
                           </span>
                         )}
+                        {/* Which AI actually wrote this script. Honest by
+                            design — the whole point of the Groq backup is
+                            that it never pretends to be the primary model.
+                            Only shown when it's the backup; Gemini (the
+                            normal case) stays unbadged so the queue isn't
+                            cluttered on an ordinary day. */}
+                        {parsedStoryboard?._provider === 'groq' && (
+                          <span className="badge" title="Gemini's daily quota was gone when this was written; the free Groq backup wrote it instead."
+                                style={{ background: 'rgba(132, 94, 247, 0.15)', color: 'var(--accent-purple)', border: '1px solid rgba(132, 94, 247, 0.3)' }}>
+                            🔁 written by Groq backup
+                          </span>
+                        )}
+                        {/* edge-tts reports the EXACT moment it spoke each word.
+                            Its fallbacks (Piper, gTTS) estimate it instead —
+                            this is the most likely real cause of caption drift,
+                            so flag it plainly rather than hiding which engine
+                            actually voiced the video. */}
+                        {parsedStoryboard?._voice_engine && parsedStoryboard._voice_engine !== 'edge-tts' && (
+                          <span className="badge" title="This video's TTS engine doesn't report exact word timing, so captions were estimated and may drift slightly from the audio. Worth a closer watch before approving."
+                                style={{ background: 'rgba(251, 133, 0, 0.15)', color: 'var(--accent-amber)', border: '1px solid rgba(251, 133, 0, 0.3)' }}>
+                            ⚠ estimated captions ({parsedStoryboard._voice_engine})
+                          </span>
+                        )}
                         {video.flags?.possible_duplicate && (
                           <span className="badge" title={`${Math.round((video.flags.similarity || 0) * 100)}% similar to "${video.flags.similar_to}"`}
                                 style={{ background: 'rgba(251, 133, 0, 0.15)', color: 'var(--accent-amber)', border: '1px solid rgba(251, 133, 0, 0.3)' }}>

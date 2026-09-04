@@ -59,6 +59,8 @@ from engine.character import library as charlib
 from engine import narrative
 from engine import brief as brief_mod
 from engine import props as props_lib
+from engine import api_budget
+from engine import backup_provider
 
 # gemini-1.5-flash (the previous hardcoded value) is almost certainly
 # retired by now — Google moved the Flash line through 2.0 -> 2.5 -> 3.x,
@@ -83,6 +85,24 @@ DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
 RETRYABLE_CODES = {503, 500}
 MAX_RETRIES = 4
 RETRY_BACKOFF_SECONDS = 3  # doubles each attempt: 3s, 6s, 12s, 24s
+
+
+class _ModelResponse:
+    """Uniform (.text, .provider) shape returned by EVERY successful call in
+    this module, whether Gemini or the Groq backup actually served it.
+
+    Callers everywhere in this codebase already do `response.text` — that
+    keeps working unchanged. `.provider` is new and lets a caller record
+    honestly which model actually wrote what it is about to save, the same
+    way topics are already tagged 'persona-auto' vs 'persona-seed-fallback'.
+    A caller that does not care about `.provider` does not have to change
+    anything.
+    """
+    __slots__ = ("text", "provider")
+
+    def __init__(self, text: str, provider: str):
+        self.text = text
+        self.provider = provider
 
 
 def _get_client(api_key: str = None):
@@ -147,7 +167,7 @@ def _call_model_with_clear_errors(client, model_name, system_prompt, user_prompt
     last_error = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            return client.models.generate_content(
+            resp = client.models.generate_content(
                 model=model_name,
                 contents=user_prompt,
                 config=types.GenerateContentConfig(
@@ -157,6 +177,7 @@ def _call_model_with_clear_errors(client, model_name, system_prompt, user_prompt
                     top_p=0.95,
                 ),
             )
+            return _ModelResponse(resp.text, "gemini")
         except errors.APIError as e:
             last_error = e
             code = getattr(e, "code", None)
@@ -168,13 +189,45 @@ def _call_model_with_clear_errors(client, model_name, system_prompt, user_prompt
                     f"https://ai.google.dev/gemini-api/docs/models for the current lineup. "
                     f"This project's default is '{model_name}'."
                 ) from e
+
             if code == 429:
+                # THE FORK: a per-MINUTE 429 clears itself in seconds and
+                # should just be retried against Gemini — treating it as a
+                # daily exhaustion would abandon Gemini (and jump to the
+                # backup, or fail outright) over a problem that fixes itself
+                # in a moment. Only a genuine per-DAY 429 falls through to
+                # the backup provider below. See engine/api_budget.py.
+                if api_budget.is_per_minute_limit(e) and attempt < MAX_RETRIES:
+                    wait = api_budget.retry_delay_seconds(e)
+                    print(f"[script_generator] \u26a0 Gemini hit its PER-MINUTE limit "
+                          f"(attempt {attempt}/{MAX_RETRIES}) — retrying in {wait}s...")
+                    time.sleep(wait)
+                    continue
+
+                # Genuine daily exhaustion. Try the free backup before
+                # giving up — this is the one situation it exists for.
+                if backup_provider.available():
+                    print(f"[script_generator] \U0001f501 Gemini's daily quota is gone. "
+                          f"Falling back to the backup provider (Groq) for this call...")
+                    try:
+                        text = backup_provider.call(system_prompt, user_prompt, temperature)
+                        print(f"[script_generator] \u2713 Backup provider answered. "
+                              f"This result is tagged 'groq', not 'gemini', wherever it is saved.")
+                        return _ModelResponse(text, backup_provider.PROVIDER_NAME)
+                    except Exception as backup_err:
+                        print(f"[script_generator] \u2717 Backup provider also failed: {backup_err}")
+                        # Fall through to the normal, clear Gemini-quota error below —
+                        # do not hide the original problem behind the backup's failure.
+
                 raise RuntimeError(
                     f"Gemini daily quota exhausted (429 RESOURCE_EXHAUSTED).\n\n"
                     f"The free tier allows a limited number of requests per day and today's "
                     f"allowance is gone. It resets at midnight Pacific.\n\n"
                     f"To fit more videos into the daily allowance, lower 'Daily video "
                     f"generation batch' in Settings. Each video costs about 2 requests.\n\n"
+                    f"No backup provider is configured, so there was nothing to fall back to. "
+                    f"See docs/13_BACKUP_AI_PROVIDER.md to add one (free, ~2 minutes) so a "
+                    f"day like this does not block testing again.\n\n"
                     f"Original error: {e}"
                 ) from e
 
@@ -487,6 +540,7 @@ Generate a {num_scenes}-scene storyboard adhering strictly to the JSON schema.
     storyboard["render_style"] = render_style
     storyboard["archetype"] = archetype or ""
     storyboard["structure"] = structure or ""
+    storyboard["_provider"] = response.provider  # 'gemini' or 'groq' — see step_summary.py
 
     # The banner is a video-level field but the renderer walks scenes, so copy
     # it down. Doing it here rather than in the renderer means every consumer

@@ -174,6 +174,129 @@ def _persona_union():
     return "channels can no longer be shadowed by the settings value"
 
 
+# ── 8. Groq fallback is wired correctly (and only for genuine daily quota) ──
+def _backup_provider():
+    src = open("engine/script_generator.py", encoding="utf-8").read()
+    if "backup_provider.available()" not in src:
+        raise RuntimeError("script_generator.py never checks backup_provider — the fallback is dead code")
+    if "is_per_minute_limit" not in src:
+        raise RuntimeError(
+            "script_generator.py's 429 handling doesn't check is_per_minute_limit — "
+            "it would fall back to Groq (or fail) on a per-minute throttle that "
+            "should just retry Gemini instead"
+        )
+    if "_ModelResponse" not in src:
+        raise RuntimeError("the uniform (.text, .provider) response wrapper is missing")
+
+    for f, needle in [
+        ("engine/topic_synthesizer.py", "_provider"),
+        ("engine/brief.py", '_provider'),
+    ]:
+        if needle not in open(f, encoding="utf-8").read():
+            raise RuntimeError(f"{f} does not record which provider wrote its output")
+
+    if not os.path.exists("engine/backup_provider.py"):
+        raise RuntimeError("engine/backup_provider.py is missing")
+    return "Gemini primary, Groq fallback only on confirmed daily quota exhaustion"
+
+
+# ── 9. Every workflow that can call Gemini also passes GROQ_API_KEY ─────────
+def _groq_wired_into_workflows():
+    needed = ["add-topics.yml", "generate.yml", "render-on-demand.yml"]
+    missing = []
+    for f in needed:
+        path = f".github/workflows/{f}"
+        if "GEMINI_API_KEY" in open(path, encoding="utf-8").read() and \
+           "GROQ_API_KEY" not in open(path, encoding="utf-8").read():
+            missing.append(f)
+    if missing:
+        raise RuntimeError(f"these workflows call Gemini but never pass GROQ_API_KEY: {missing}")
+    return f"{len(needed)} workflows pass GROQ_API_KEY through"
+
+
+# ── 10. Migrations auto-deploy, and the folder stays idempotent ─────────────
+def _migration_automation():
+    wf = ".github/workflows/deploy-migrations.yml"
+    if not os.path.exists(wf):
+        raise RuntimeError("deploy-migrations.yml is missing")
+    src = open(wf, encoding="utf-8").read()
+    for needle in ["supabase/migrations/**", "supabase db push", "SUPABASE_DB_PASSWORD"]:
+        if needle not in src:
+            raise RuntimeError(f"deploy-migrations.yml is missing expected content: {needle!r}")
+
+    # Every migration must stay safe to re-run — this is what makes it safe
+    # for `supabase db push` to run on every push without a human checking
+    # each one first.
+    unsafe = []
+    for f in glob.glob("supabase/migrations/*.sql"):
+        sql = open(f, encoding="utf-8").read().upper()
+        if "ADD COLUMN" in sql and "IF NOT EXISTS" not in sql:
+            unsafe.append(f)
+    if unsafe:
+        raise RuntimeError(f"non-idempotent ADD COLUMN (no IF NOT EXISTS) in: {unsafe}")
+    return f"{len(glob.glob('supabase/migrations/*.sql'))} migration file(s), all idempotent"
+
+
+# ── 11. Caption timing source is tagged and gated ───────────────────────────
+def _voice_engine_honesty():
+    orch = open("engine/orchestrator.py", encoding="utf-8").read()
+    if '_voice_engine' not in orch:
+        raise RuntimeError("orchestrator.py never tags the storyboard with which TTS engine spoke it")
+    gates = open("engine/quality_gates.py", encoding="utf-8").read()
+    if "_voice_engine" not in gates or "caption_timing" not in gates:
+        raise RuntimeError("quality_gates.py doesn't flag estimated (non-edge-tts) caption timing")
+    ve = open("engine/voice_engine.py", encoding="utf-8").read()
+    if "attempts=5" not in ve:
+        raise RuntimeError("edge-tts retry count was not bumped — still vulnerable to short rate-limit windows")
+    return "estimated-timing videos are tagged, gated as warn, and retries widened to 5 attempts"
+
+
+# ── 12. YOUTUBE_API_KEY is actually reachable via config.get() ─────────────
+def _youtube_api_key_registered():
+    src = open("engine/config.py", encoding="utf-8").read()
+    if '"YOUTUBE_API_KEY"' not in src:
+        raise RuntimeError(
+            "YOUTUBE_API_KEY is missing from config.py's _env dict, so "
+            "config.get('YOUTUBE_API_KEY') always returns None even when the "
+            "secret IS set in the environment. This silently kills all of "
+            "engine/trending.py (Discover Trending Topics workflow, "
+            "--auto-add, and topic_inspiration)."
+        )
+    return "YOUTUBE_API_KEY is registered and reachable via config.get()"
+
+
+# ── 13. Trending feeds topic reasoning as inspiration, never as the topic ───
+def _trending_stays_inspiration_only():
+    src = open("engine/trending.py", encoding="utf-8").read()
+    if "def topic_inspiration" not in src:
+        raise RuntimeError("trending.topic_inspiration is missing")
+
+    # Extract just the topic_inspiration function body and make sure it never
+    # writes to the database. If it ever does, trending has stopped being
+    # "inspiration for the model's own reasoning" and started being "another
+    # list the app reads from" — the exact regression PROJECT_HANDOFF.md
+    # warns against.
+    start = src.index("def topic_inspiration")
+    end = src.index("\ndef auto_add")
+    body = src[start:end]
+    if ".insert(" in body or ".table(" in body:
+        raise RuntimeError(
+            "topic_inspiration() touches the database directly — it must only "
+            "return text for the model to consider, never write a topic itself."
+        )
+
+    ts_src = open("engine/topic_synthesizer.py", encoding="utf-8").read()
+    if "topic_inspiration" not in ts_src:
+        raise RuntimeError("topic_synthesizer.py never calls trending.topic_inspiration")
+    if "invent your own specific topic" not in ts_src.lower() and \
+       "invent your own" not in ts_src.lower():
+        raise RuntimeError(
+            "the trending block doesn't instruct the model to invent its own "
+            "topic rather than copy the trending titles verbatim"
+        )
+    return "trending signal reaches the prompt as inspiration only; auto_add() (direct insert) is unchanged and still opt-in"
+
+
 if __name__ == "__main__":
     check("Python syntax", _syntax)
     check("Undefined names", _undefined)
@@ -182,6 +305,12 @@ if __name__ == "__main__":
     check("Content config", _content_config)
     check("Upload spacing", _spacing)
     check("Topic persona resolution", _persona_union)
+    check("Groq backup provider", _backup_provider)
+    check("Groq wired into workflows", _groq_wired_into_workflows)
+    check("Automatic migrations", _migration_automation)
+    check("Voice engine honesty", _voice_engine_honesty)
+    check("YOUTUBE_API_KEY reachable", _youtube_api_key_registered)
+    check("Trending stays inspiration-only", _trending_stays_inspiration_only)
 
     print()
     for name, detail in PASSED:

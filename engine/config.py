@@ -15,7 +15,21 @@ load_dotenv()
 _env = {
     "GEMINI_API_KEY":           os.getenv("GEMINI_API_KEY"),
     "GEMINI_MODEL":             os.getenv("GEMINI_MODEL"),
+    "GROQ_API_KEY":             os.getenv("GROQ_API_KEY"),
+    "GROQ_MODEL":               os.getenv("GROQ_MODEL"),
     "PEXELS_API_KEY":           os.getenv("PEXELS_API_KEY"),
+    # This is the separate, simple YouTube Data API v3 key (distinct from
+    # the YOUTUBE_CLIENT_* OAuth credentials below, which are for
+    # publishing). It was missing from this dict entirely, which meant
+    # engine/trending.py's get("YOUTUBE_API_KEY") always returned None even
+    # when the secret WAS set correctly in GitHub Actions — the workflow
+    # passed it into the environment just fine, but nothing here ever read
+    # it back out. The whole trending-discovery path (the "Discover
+    # Trending Topics" workflow, the --auto-add CLI, and topic_inspiration
+    # below) was silently dead the entire time. Found by actually testing
+    # the new topic_inspiration() wiring end-to-end rather than assuming
+    # a green build meant it worked.
+    "YOUTUBE_API_KEY":          os.getenv("YOUTUBE_API_KEY"),
     "SUPABASE_URL":             os.getenv("SUPABASE_URL"),
     "SUPABASE_ANON_KEY":        os.getenv("SUPABASE_ANON_KEY"),
     "SUPABASE_SERVICE_KEY":     os.getenv("SUPABASE_SERVICE_KEY"),

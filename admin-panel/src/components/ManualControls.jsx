@@ -108,21 +108,14 @@ export default function ManualControls({ compact = false }) {
               key={action.id}
               onClick={() => run(action)}
               disabled={busy !== null}
-              className="card"
-              style={{
-                textAlign: 'left',
-                cursor: busy ? 'wait' : 'pointer',
-                border: '1px solid var(--border)',
-                background: 'var(--bg-elevated)',
-                padding: 14,
-                opacity: busy && !isBusy ? 0.5 : 1,
-              }}
+              className="manual-action-btn"
+              style={{ opacity: busy && !isBusy ? 0.5 : 1 }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
                 {isBusy
                   ? <Loader2 size={16} color={action.color} className="spin" />
                   : <Icon size={16} color={action.color} />}
-                <span style={{ fontWeight: 600, fontSize: '0.85rem' }}>
+                <span style={{ fontWeight: 600, fontSize: '0.85rem', color: 'var(--text-primary)' }}>
                   {isBusy ? 'Starting\u2026' : action.label}
                 </span>
               </div>

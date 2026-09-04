@@ -149,6 +149,7 @@ Now do the five-angle process and return the brief as JSON."""
         brief["_archetype"] = archetype
         brief["_structure"] = structure
         brief["_persona"] = persona_key
+        brief["_provider"] = response.provider  # 'gemini' or 'groq' — see step_summary.py
 
         print(f"[brief] \u2713 Angle: {brief['chosen_angle'][:90]}")
         if brief.get("lazy_version_to_avoid"):

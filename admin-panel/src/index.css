@@ -740,10 +740,44 @@ tr:hover td { background: var(--bg-elevated); }
 .btn.sm { padding: 0.32rem 0.65rem; font-size: 0.8rem; }
 .btn.danger { color: #e46b6b; border-color: rgba(220,70,70,0.4); }
 
-/* ── Manual control buttons ──────────────────────────────────────────────
-   Added for the "Run something now" panel. The .spin class animates the
-   loading icon while a GitHub Actions run is being started. */
+/* ── Manual "run it now" action buttons (Dashboard / Topic Studio) ──────────
+   These are <button> elements, not <div>s, so browser defaults (a light
+   button face, black system text colour) fight the app's own dark theme
+   unless explicitly reset here — the .card class alone only styles the
+   background/border of a div; it was never meant to reset native button
+   chrome and doesn't set a text colour at all. */
+.manual-action-btn {
+  all: unset;                 /* strip every native button default first */
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.1s ease;
+}
+.manual-action-btn:hover:not(:disabled) {
+  border-color: var(--border-bright, var(--accent-primary));
+  background: #1b2233;
+}
+.manual-action-btn:active:not(:disabled) { transform: translateY(1px); }
+.manual-action-btn:focus-visible {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.manual-action-btn:disabled { cursor: wait; opacity: 0.5; }
+
+/* Was accidentally dropped while adding the block above — caught by
+   re-viewing the file, not by assuming the edit was clean. Used on the
+   Loader2 icon in ManualControls.jsx and VideoQueue.jsx while a request
+   is in flight. */
 .spin { animation: spin 1s linear infinite; }
+
 
 .publish-now-btn {
   background: rgba(45, 206, 137, 0.12);

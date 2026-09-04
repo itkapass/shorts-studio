@@ -195,6 +195,29 @@ def run_gates(video_path: str, storyboard: dict = None, expect_audio: bool = Tru
         add("caption_length", longest <= 240, "warn",
             f"longest scene is {longest} characters — may overflow on screen")
 
+        # ── Caption timing precision ─────────────────────────────────────────
+        # edge-tts reports the exact moment it spoke each word (ground truth).
+        # Its two fallbacks (Piper, gTTS) do not — they estimate each word's
+        # timing proportionally from syllable count, anchored to the real
+        # total duration but with no way to know where an engine actually
+        # paused for a breath or a comma. That estimate can visibly drift
+        # from the real audio on longer sentences, which is exactly what
+        # reads as "the captions feel out of sync" without any single frame
+        # looking obviously broken.
+        #
+        # This used to fail completely silently: the video still rendered,
+        # still passed every other gate, and the ONLY trace that it used
+        # degraded timing was a console log line in a run nobody was
+        # watching. Flagging it here means a human reviewing the queue sees
+        # it before approving, instead of finding out from comments after
+        # it is already public.
+        voice_engine = storyboard.get("_voice_engine")
+        if voice_engine and voice_engine != "edge-tts":
+            add("caption_timing", False, "warn",
+                f"voiced by '{voice_engine}', not edge-tts — captions use ESTIMATED "
+                f"timing and may drift from the audio, especially on longer lines. "
+                f"Watch this one before approving.")
+
     if result["failures"]:
         result["verdict"] = "reject"
     elif result["warnings"]:

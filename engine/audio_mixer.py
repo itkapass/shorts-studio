@@ -50,7 +50,9 @@ def mix_audio(
 
     Args:
         voiceover_path:   Path to the TTS audio file (.mp3)
-        word_timestamps:  Word-level timestamps from Whisper (for ducking calculations)
+        word_timestamps:  Word-level timestamps (edge-tts ground truth when
+                          available, else estimated — see voice_engine.py)
+                          used for ducking calculations
         scene_timestamps: Scene timing data (for placing SFX on transitions)
         total_duration:   Total video duration in seconds
         output_path:      Path for the output mixed audio file (.mp3)

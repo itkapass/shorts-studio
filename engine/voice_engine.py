@@ -128,34 +128,50 @@ async def _edge_tts_with_timings(text: str, voice_id: str, output_path: str):
     return words
 
 
-def _try_edge_tts(text, voice_id, output_path, attempts=3):
+def _try_edge_tts(text, voice_id, output_path, attempts=5):
     """Tries edge-tts, retrying transient failures before giving up.
 
     Retries matter specifically in GitHub Actions: edge-tts is an unofficial
     wrapper around Microsoft's read-aloud service, and Microsoft rate-limits
     datacenter IP ranges far more aggressively than home connections. A run
-    that fails on the first attempt very often succeeds on the second a few
-    seconds later. Without retries a single transient block took down the
-    entire render, which is exactly what happened in the failing run.
+    that fails on the first attempt very often succeeds a few seconds later.
+
+    BUMPED FROM 3 TO 5 ATTEMPTS, WITH LONGER BACKOFF AND JITTER. Three quick
+    attempts (3s, 6s) is enough for a one-off hiccup but not for a real rate
+    limit window, which can hold for 15-20+ seconds -- three fast attempts
+    can all land inside the same blocked window and give up right before it
+    would have cleared. Every time this falls through to a fallback engine,
+    the video's captions switch from edge-tts's exact per-word timing to an
+    ESTIMATED one (see estimate_word_timings below), which is the most
+    likely real cause of visible caption drift -- not a bug in the timing
+    math itself, but silently losing access to ground truth. Fewer
+    fallbacks means fewer videos with estimated timing, which is the actual
+    fix for "the next batch might have the same problem."
+
+    Jitter (a small random extra wait) is added so that when several videos
+    in the same batch hit the limiter at once, their retries do not all
+    land on the exact same second and re-collide.
     """
     import time
+    import random
 
     for attempt in range(1, attempts + 1):
         try:
             words = asyncio.run(_edge_tts_with_timings(text, voice_id, output_path))
             if not words or os.path.getsize(output_path) < 1024:
                 raise RuntimeError("edge-tts returned no audio or no word boundaries")
-            print(f"[voice_engine] ✓ edge-tts: {len(words)} words with exact timings")
+            print(f"[voice_engine] ✓ edge-tts: {len(words)} words with exact timings"
+                  + (f" (attempt {attempt})" if attempt > 1 else ""))
             return words
         except Exception as e:
             if attempt < attempts:
-                wait = 3 * attempt
+                wait = min(4 * (2 ** (attempt - 1)), 45) + random.uniform(0, 2)
                 print(f"[voice_engine] ⚠ edge-tts attempt {attempt}/{attempts} failed ({e}). "
-                      f"Retrying in {wait}s...")
+                      f"Retrying in {wait:.1f}s...")
                 time.sleep(wait)
             else:
                 print(f"[voice_engine] ⚠ edge-tts unavailable after {attempts} attempts ({e}). "
-                      f"Trying offline fallback...")
+                      f"Falling back to an engine with ESTIMATED (not exact) caption timing.")
     return None
 
 
