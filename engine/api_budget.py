@@ -39,6 +39,7 @@ exactly what the docs say, and being one call short is far more annoying than
 generating one fewer video.
 """
 from engine import daycycle
+from engine import backup_provider
 
 # Gemini free tier daily request cap. Overridable via the GEMINI_DAILY_BUDGET
 # setting because Google changes this and paid tiers are far higher.
@@ -120,19 +121,50 @@ class BudgetTracker:
         return not self._hard_stopped and self.remaining >= calls
 
     def require(self, calls: int, what: str = "this step"):
-        """Raises QuotaExhausted if `calls` cannot be afforded.
+        """Raises QuotaExhausted if `calls` cannot be afforded — UNLESS a
+        backup provider is configured, in which case this deliberately lets
+        the caller proceed.
 
-        Call this BEFORE starting an expensive multi-step operation, so the
-        pipeline never begins a video it cannot finish.
+        THE BUG THIS FIXES: this used to raise unconditionally whenever the
+        LOCAL counter said the budget was gone, which happened BEFORE any
+        real Gemini call was ever attempted for that video. The Groq
+        fallback (engine/backup_provider.py) only ever runs from INSIDE a
+        caught, real 429 in script_generator._call_model_with_clear_errors
+        — so a caller that never got that far because THIS check stopped it
+        first could never reach Groq at all. Someone could add a Groq key,
+        do everything right, and still see every run exit in under a
+        minute with zero videos, because the safety net that was supposed
+        to catch them was never given the chance to run.
+
+        Now: if a backup is configured, this lets the real call happen. One
+        of two things follows, both fine —
+          - the local counter was right, Gemini genuinely 429s, and THAT
+            real error is what correctly triggers the Groq fallback, or
+          - the local counter was stale (a leftover count from earlier
+            testing, a per-key mismatch after adding new channel keys) and
+            the real call just succeeds, which is strictly better than
+            never finding out.
+        A backup provider turns "not enough recorded quota" from a hard
+        stop into a reason to try the second option instead of giving up.
         """
         self.load()
         if self._hard_stopped:
+            if backup_provider.available():
+                print(f"[api_budget] Local budget shows hard-stopped for {what}, but a "
+                      f"backup provider is configured — proceeding anyway so the real "
+                      f"call (and its fallback) gets a chance to run.")
+                return
             raise QuotaExhausted(
                 "The Gemini daily quota was already hit earlier in this run. "
                 "Stopping so the rest of today's budget is not wasted on calls "
                 "that will also fail."
             )
         if self.remaining < calls:
+            if backup_provider.available():
+                print(f"[api_budget] Local budget shows {self.remaining} remaining "
+                      f"(need {calls}) for {what}, but a backup provider is configured — "
+                      f"proceeding anyway rather than giving up before trying.")
+                return
             raise QuotaExhausted(
                 f"Not enough Gemini quota left for {what}: needs {calls}, "
                 f"{self.remaining} remaining of {self.daily_budget} today.\n\n"

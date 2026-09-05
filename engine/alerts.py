@@ -221,10 +221,18 @@ if __name__ == "__main__":
     print(f"  Email:    {'configured' if em else 'NOT configured'}")
 
     if not (tg or em):
-        print("\n  Neither is set up, so nothing can be sent.")
+        print("\n  Neither is set up, so there is nothing to test yet — that's fine, "
+              "alerts are optional.")
         print("  Telegram takes 5 minutes and is free: see docs/08.")
         print("  You need TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.\n")
-        raise SystemExit(1)
+        # Exit 0, not 1. This check did its job correctly — it determined
+        # alerts are not configured, which is a normal, chosen state, not a
+        # bug. Exiting 1 here made "Test Alerts" show a red X on the Actions
+        # tab for the completely ordinary situation of not having set up an
+        # OPTIONAL feature yet — which reads exactly like something is
+        # broken when nothing is. Red should mean "this needs you because
+        # something failed," not "you haven't opted into an extra yet."
+        raise SystemExit(0)
 
     print("\nSending a test alert...")
     result = alert(

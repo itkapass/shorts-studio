@@ -20,9 +20,41 @@
 // trigger-workflow edge function. Nothing runs in your browser — the
 // browser only asks GitHub to start the same job the schedule would.
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { supabase, getFunctionErrorMessage } from '../lib/supabase'
-import { Lightbulb, Clapperboard, Send, Loader2, ExternalLink, AlertTriangle, CheckCircle2 } from 'lucide-react'
+import { Lightbulb, Clapperboard, Send, Loader2, ExternalLink, AlertTriangle, CheckCircle2, Clock } from 'lucide-react'
+
+// Matches the actual cron schedules in .github/workflows/*.yml. Not fetched
+// live — GitHub doesn't expose "when will this cron next fire" through any
+// API, so the schedule is mirrored here. If you ever change a cron line in
+// the workflow files, update the matching entry below too, or this countdown
+// will confidently show the wrong time.
+const SCHEDULES_UTC = {
+  topics:   { hours: [7], minutes: 30 },                          // add-topics.yml
+  generate: { hours: [8, 11, 14, 17, 20, 23], minutes: 0 },        // generate.yml
+  publish:  { hours: Array.from({ length: 24 }, (_, h) => h), minutes: 7 }, // publish.yml, hourly
+}
+
+function nextRunFor(schedule, now) {
+  let best = null
+  for (const h of schedule.hours) {
+    const candidate = new Date(Date.UTC(
+      now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), h, schedule.minutes, 0
+    ))
+    if (candidate <= now) candidate.setUTCDate(candidate.getUTCDate() + 1)
+    if (!best || candidate < best) best = candidate
+  }
+  return best
+}
+
+function formatCountdown(target, now) {
+  const ms = target - now
+  if (ms <= 0) return 'due now'
+  const mins = Math.floor(ms / 60000)
+  const h = Math.floor(mins / 60)
+  const m = mins % 60
+  return h > 0 ? `${h}h ${m}m` : `${m}m`
+}
 
 const ACTIONS = [
   {
@@ -58,6 +90,12 @@ const ACTIONS = [
 export default function ManualControls({ compact = false }) {
   const [busy, setBusy] = useState(null)
   const [result, setResult] = useState(null)
+  const [now, setNow] = useState(() => new Date())
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 30000)
+    return () => clearInterval(id)
+  }, [])
 
   async function run(action) {
     setBusy(action.id)
@@ -125,6 +163,15 @@ export default function ManualControls({ compact = false }) {
               <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: 8, opacity: 0.8 }}>
                 {action.time} · {action.cost}
               </div>
+              {SCHEDULES_UTC[action.id] && (
+                <div style={{
+                  fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: 4,
+                  display: 'flex', alignItems: 'center', gap: 4, opacity: 0.7,
+                }}>
+                  <Clock size={11} />
+                  next auto-run in {formatCountdown(nextRunFor(SCHEDULES_UTC[action.id], now), now)}
+                </div>
+              )}
             </button>
           )
         })}

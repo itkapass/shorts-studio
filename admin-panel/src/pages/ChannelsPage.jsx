@@ -40,6 +40,13 @@ const PERSONAS = [
   ['what_if_physics', 'What If — Real Science, Absurd Questions'],
   ['awareness_comedy', 'Awareness Through Comedy'],
   ['everyday_origins', 'Why Ordinary Things Are The Way They Are'],
+  // Was missing entirely — this dropdown is a hand-copied list, not read
+  // live from engine/personas.py, so when a persona was added there this
+  // list silently fell out of sync and quietly had no way to say so. There
+  // was no error, just one option that could never appear. If you add a
+  // 9th persona later, it has to be added HERE too, by hand — nothing
+  // enforces the two lists staying in sync.
+  ['quotes_and_poetry', 'Tamil Words, Wisdom & Original Lines'],
 ]
 
 const PERSONAS_META = {
@@ -70,6 +77,11 @@ const PERSONAS_META = {
   everyday_origins: {
     categories: ['informative', 'myth_busting', 'life_hack'],
     description: 'Why ordinary objects are the way they are. Effectively inexhaustible.',
+  },
+  quotes_and_poetry: {
+    categories: ['informative', 'wholesome', 'myth_busting', 'life_hack'],
+    description: 'Tamil proverbs, tongue twisters, folk sayings and slang alongside original '
+      + 'aphorisms and short poems — real strands must be genuinely real, original ones genuinely new.',
   },
 }
 

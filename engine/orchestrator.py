@@ -68,6 +68,7 @@ from engine import narrative
 from engine import personas as personas_mod
 from engine import topic_synthesizer
 from engine import api_budget
+from engine import backup_provider
 from engine import daycycle
 from engine import step_summary
 from engine import brief as brief_mod
@@ -284,7 +285,7 @@ def run_generation_pipeline(manual_count: int = None, skip_topics: bool = False,
     cost_each = api_budget.estimate_calls_per_video(use_brief=True, use_ranking=False)
     affordable = _default_budget.remaining // max(cost_each, 1)
 
-    if affordable < 1:
+    if affordable < 1 and not backup_provider.available():
         # BUGFIX: this used to read `budget.spent`, but the tracker built two
         # lines above is called `_default_budget`; `budget` is only assigned
         # much further down, INSIDE the video loop. Python marks a name local
@@ -300,7 +301,8 @@ def run_generation_pipeline(manual_count: int = None, skip_topics: bool = False,
             f"The allowance refills in about {daycycle.humanize_until_reset()} "
             f"(midnight Pacific). To fit more videos into it, lower 'Daily video "
             f"generation batch' in Settings, or give each channel its own Gemini "
-            f"key from a separate Google account (docs/10)."
+            f"key from a separate Google account (docs/10). Or add a free Groq "
+            f"backup (docs/13) so a day like this doesn't stop generation at all."
         )
         print(f"[orchestrator] {msg}")
         alerts.alert("Gemini daily quota is used up", msg, severity="warn")
@@ -309,7 +311,17 @@ def run_generation_pipeline(manual_count: int = None, skip_topics: bool = False,
         # tab — red should mean "something is broken and needs you".
         return
 
-    if affordable < videos_this_run:
+    if affordable < 1:
+        # A backup IS configured. Don't give up before the real call even
+        # happens — see api_budget.require()'s docstring for the full story
+        # of why this exact check used to make a configured Groq key
+        # completely unreachable. Keep going at the schedule's normal pace;
+        # every call below will legitimately try Gemini first and only
+        # fail over to Groq on a REAL 429, not this local estimate.
+        print(f"[orchestrator] Local Gemini budget shows 0 remaining "
+              f"({_default_budget.spent}/{_default_budget.daily_budget}), but a Groq "
+              f"backup is configured. Proceeding — real calls will fail over as needed.")
+    elif affordable < videos_this_run:
         print(f"[orchestrator] Budget allows {affordable} video(s), not {videos_this_run}. "
               f"Generating {affordable} and stopping cleanly.")
         videos_this_run = affordable

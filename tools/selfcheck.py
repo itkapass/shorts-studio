@@ -344,6 +344,44 @@ def _ai_visual_backup():
     return "Pexels stays primary; AI-generated visual only fires in _get_fallback"
 
 
+# ── 17. A configured backup provider can actually be reached ───────────────
+def _backup_reachable_despite_local_budget():
+    """THE most important check added this round. Guards against the exact
+    bug reported: Groq was configured correctly, but a LOCAL, possibly-stale
+    budget counter blocked every video before a real Gemini call was ever
+    attempted — so the fallback that was supposed to catch this never got
+    the chance to run at all."""
+    ab = open("engine/api_budget.py", encoding="utf-8").read()
+    if "backup_provider.available()" not in ab:
+        raise RuntimeError(
+            "api_budget.require() no longer checks backup_provider.available() — "
+            "a configured Groq key can once again be silently unreachable "
+            "whenever the local budget counter says zero, stale or not."
+        )
+    orch = open("engine/orchestrator.py", encoding="utf-8").read()
+    if "backup_provider.available()" not in orch:
+        raise RuntimeError(
+            "orchestrator.py's pre-flight budget gate no longer checks "
+            "backup_provider.available() before giving up early."
+        )
+    return "a local 'budget exhausted' reading no longer blocks a configured backup"
+
+
+# ── 18. Every real persona is selectable on the Channels page ──────────────
+def _channels_dropdown_complete():
+    from engine import personas
+    jsx = open("admin-panel/src/pages/ChannelsPage.jsx", encoding="utf-8").read()
+    missing = [k for k in personas.PERSONAS if f"'{k}'" not in jsx]
+    if missing:
+        raise RuntimeError(
+            f"ChannelsPage.jsx's hardcoded PERSONAS list is missing: {missing}. "
+            f"This list is hand-copied from engine/personas.py, not read live from "
+            f"it, so a persona that exists in the backend can be completely "
+            f"unselectable in the dashboard with no error anywhere."
+        )
+    return f"all {len(personas.PERSONAS)} personas are present in the dropdown"
+
+
 if __name__ == "__main__":
     check("Python syntax", _syntax)
     check("Undefined names", _undefined)
@@ -361,6 +399,8 @@ if __name__ == "__main__":
     check("Real YouTube captions", _real_captions_wired)
     check("Semantic duplicate detection", _semantic_dedup)
     check("AI-generated visual backup", _ai_visual_backup)
+    check("Backup reachable despite local budget", _backup_reachable_despite_local_budget)
+    check("Channels dropdown has every persona", _channels_dropdown_complete)
 
     print()
     for name, detail in PASSED:

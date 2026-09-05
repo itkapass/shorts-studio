@@ -104,9 +104,50 @@ export default function VideoQueue() {
   const [loading, setLoading] = useState(true)
   const [expandedId, setExpandedId] = useState(null)
   const [actionLoading, setActionLoading] = useState({})
+  // Per-tab counts, e.g. { queued_for_render: 2, rendering: 1, pending: 4, ... }.
+  // Deliberately a SEPARATE, lightweight query from loadVideos() below —
+  // loadVideos() re-fetches full rows (including large fields like the
+  // storyboard JSON and now captions_srt) filtered to ONE status at a time,
+  // so the `videos` array in state never contains every status at once and
+  // can't be counted from client-side. These use Supabase's count-only
+  // mode (head: true) so tallying six tabs costs six tiny requests, never
+  // six full row downloads. This is the direct answer to "I can't tell how
+  // many are pending / rendering / failed without clicking through every
+  // tab."
+  const [counts, setCounts] = useState({})
+
+  async function loadCounts() {
+    const statuses = {
+      queued_for_render: ['queued_for_render'],
+      rendering:         ['rendering'],
+      pending:           ['pending'],
+      approved:          ['approved'],
+      published:         ['published'],
+      failed:            ['failed', 'publish_failed'],
+    }
+    const entries = await Promise.all(
+      Object.entries(statuses).map(async ([key, statusList]) => {
+        const { count } = await supabase
+          .from('videos')
+          .select('id', { count: 'exact', head: true })
+          .in('status', statusList)
+        return [key, count || 0]
+      })
+    )
+    const next = Object.fromEntries(entries)
+    // A direct count of the whole table, not a sum of the buckets above —
+    // summing would silently under-count "All History" if a status value
+    // ever exists that isn't one of the six named here.
+    const { count: totalCount } = await supabase
+      .from('videos')
+      .select('id', { count: 'exact', head: true })
+    next.all = totalCount || 0
+    setCounts(next)
+  }
 
   useEffect(() => {
     loadVideos()
+    loadCounts()
   }, [filter])
 
   async function loadVideos() {
@@ -116,7 +157,12 @@ export default function VideoQueue() {
       .select('*, topics(name, category), tones(name)')
       .order('created_at', { ascending: false })
 
-    if (filter !== 'all') {
+    if (filter === 'failed') {
+      // Two distinct status values share this one tab — a generation
+      // failure and a publish failure are different stages going wrong,
+      // but from here you just want "what broke," not which stage.
+      query = query.in('status', ['failed', 'publish_failed'])
+    } else if (filter !== 'all') {
       query = query.eq('status', filter)
     }
 
@@ -163,6 +209,7 @@ export default function VideoQueue() {
       alert(`Error updating video: ${error.message}`)
     } else {
       setVideos(videos.map(v => v.id === id ? { ...v, ...updatePayload } : v))
+      loadCounts()
     }
     setActionLoading(prev => ({ ...prev, [id]: false }))
   }
@@ -180,6 +227,7 @@ export default function VideoQueue() {
       alert(`Error deleting video: ${error.message}`)
     } else {
       setVideos(videos.filter(v => v.id !== id))
+      loadCounts()
     }
     setActionLoading(prev => ({ ...prev, [id]: false }))
   }
@@ -236,24 +284,54 @@ export default function VideoQueue() {
       </div>
 
       {/* Filter Tabs */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 24 }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 24, flexWrap: 'wrap' }}>
         {[
           { id: 'queued_for_render', label: 'Awaiting Render' },
           { id: 'rendering', label: 'Rendering' },
           { id: 'pending', label: 'Pending Review' },
           { id: 'approved', label: 'Approved & Scheduled' },
           { id: 'published', label: 'Published' },
+          { id: 'failed', label: 'Failed', danger: true },
           { id: 'all', label: 'All History' }
-        ].map(tab => (
-          <button
-            key={tab.id}
-            onClick={() => setFilter(tab.id)}
-            className={`btn btn-sm ${filter === tab.id ? 'btn-primary' : 'btn-ghost'}`}
-          >
-            {tab.label}
-          </button>
-        ))}
+        ].map(tab => {
+          const n = counts[tab.id]
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setFilter(tab.id)}
+              className={`btn btn-sm ${filter === tab.id ? 'btn-primary' : 'btn-ghost'}`}
+              style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+            >
+              {tab.label}
+              {/* Only shown once counts have loaded and there's something to
+                  show — a permanent "0" on every tab before the first count
+                  query resolves would read as broken, not empty. */}
+              {typeof n === 'number' && n > 0 && (
+                <span style={{
+                  fontSize: '0.68rem', fontWeight: 700, lineHeight: 1,
+                  padding: '2px 6px', borderRadius: 999,
+                  background: tab.danger ? 'rgba(239, 68, 68, 0.25)' : 'rgba(255,255,255,0.15)',
+                  color: tab.danger ? '#f87171' : 'inherit',
+                }}>
+                  {n}
+                </span>
+              )}
+            </button>
+          )
+        })}
       </div>
+
+      {filter === 'failed' && (
+        <div style={{
+          margin: '0 0 16px', padding: '10px 14px', borderRadius: 6, fontSize: '0.8rem',
+          background: 'rgba(239, 68, 68, 0.1)', color: '#f87171',
+          border: '1px solid rgba(239, 68, 68, 0.25)',
+        }}>
+          Generation failures and publish failures together. Each card explains why —
+          most are either a Gemini quota limit (self-resolving) or Gemini being briefly
+          overloaded (503, also self-resolving on retry).
+        </div>
+      )}
 
       {publishMsg && (
         <div style={{
