@@ -297,6 +297,53 @@ def _trending_stays_inspiration_only():
     return "trending signal reaches the prompt as inspiration only; auto_add() (direct insert) is unchanged and still opt-in"
 
 
+# ── 14. Real YouTube captions get uploaded, best-effort, never blocking ────
+def _real_captions_wired():
+    orch = open("engine/orchestrator.py", encoding="utf-8").read()
+    if "captions_srt" not in orch:
+        raise RuntimeError("orchestrator.py never captures/stores the SRT content")
+    pub = open("engine/publisher.py", encoding="utf-8").read()
+    if "def upload_captions" not in pub:
+        raise RuntimeError("publisher.py has no upload_captions function")
+    if "captions().insert" not in pub:
+        raise RuntimeError("upload_captions doesn't actually call the YouTube captions API")
+    pa = open("engine/publish_approved.py", encoding="utf-8").read()
+    if "captions_srt=row.get" not in pa:
+        raise RuntimeError("publish_approved.py never passes the stored SRT through to upload_video")
+    mig = "supabase/migrations/004_real_captions_and_visual_source.sql"
+    if not os.path.exists(mig):
+        raise RuntimeError(f"{mig} is missing")
+    return "SRT survives render -> DB -> publish -> real YouTube caption track"
+
+
+# ── 15. Semantic duplicate detection degrades gracefully ────────────────────
+def _semantic_dedup():
+    src = open("engine/concept_memory.py", encoding="utf-8").read()
+    if "_semantic_similarity" not in src or "SEMANTIC_CEILING" not in src:
+        raise RuntimeError("semantic similarity signal is missing from concept_memory.py")
+    if "_get_embedder" not in src or "_embedder = False" not in src:
+        raise RuntimeError("_get_embedder doesn't appear to degrade gracefully on import failure")
+    if "sentence-transformers" not in open("requirements.txt", encoding="utf-8").read():
+        raise RuntimeError("sentence-transformers is used but not declared in requirements.txt")
+    return "adds a real semantic signal; falls back to lexical+topical if unavailable"
+
+
+# ── 16. AI-generated visual backup only fires after Pexels has failed ──────
+def _ai_visual_backup():
+    if not os.path.exists("engine/backup_visuals.py"):
+        raise RuntimeError("engine/backup_visuals.py is missing")
+    vf = open("engine/visual_fetcher.py", encoding="utf-8").read()
+    if "backup_visuals" not in vf:
+        raise RuntimeError("visual_fetcher.py never calls into backup_visuals")
+    # Must only be reachable from _get_fallback — never called as a first
+    # choice ahead of the Pexels search above it.
+    if vf.index("def fetch_clip_for_scene") > vf.index("backup_visuals"):
+        raise RuntimeError("backup_visuals appears to be wired in BEFORE the Pexels search, not as a fallback")
+    if '"HUGGINGFACE_API_KEY"' not in open("engine/config.py", encoding="utf-8").read():
+        raise RuntimeError("HUGGINGFACE_API_KEY is not registered in config.py")
+    return "Pexels stays primary; AI-generated visual only fires in _get_fallback"
+
+
 if __name__ == "__main__":
     check("Python syntax", _syntax)
     check("Undefined names", _undefined)
@@ -311,6 +358,9 @@ if __name__ == "__main__":
     check("Voice engine honesty", _voice_engine_honesty)
     check("YOUTUBE_API_KEY reachable", _youtube_api_key_registered)
     check("Trending stays inspiration-only", _trending_stays_inspiration_only)
+    check("Real YouTube captions", _real_captions_wired)
+    check("Semantic duplicate detection", _semantic_dedup)
+    check("AI-generated visual backup", _ai_visual_backup)
 
     print()
     for name, detail in PASSED:

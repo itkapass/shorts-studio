@@ -17,6 +17,8 @@ _env = {
     "GEMINI_MODEL":             os.getenv("GEMINI_MODEL"),
     "GROQ_API_KEY":             os.getenv("GROQ_API_KEY"),
     "GROQ_MODEL":               os.getenv("GROQ_MODEL"),
+    "HUGGINGFACE_API_KEY":      os.getenv("HUGGINGFACE_API_KEY"),
+    "HUGGINGFACE_IMAGE_MODEL":  os.getenv("HUGGINGFACE_IMAGE_MODEL"),
     "PEXELS_API_KEY":           os.getenv("PEXELS_API_KEY"),
     # This is the separate, simple YouTube Data API v3 key (distinct from
     # the YOUTUBE_CLIENT_* OAuth credentials below, which are for

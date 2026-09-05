@@ -656,13 +656,37 @@ def _render_pipeline(
     # from the storyboard, so skip the Pexels round-trip entirely for them.
     if render_style == "stock_footage":
         scenes_with_clips = fetch_all_scene_clips(scenes_with_times, job_id)
+        # Fold each scene's actual visual source (pexels / cache / ai_generated
+        # / fallback) back into the storyboard that gets saved, not just the
+        # transient render-time list. Without this, an AI-generated backup
+        # visual (see engine/backup_visuals.py) rendered correctly but left no
+        # trace anywhere a human could see WHICH scenes it touched — the same
+        # kind of silent-provider gap already fixed for the script (Gemini vs
+        # Groq) and the voice (edge-tts vs its fallbacks).
+        for sb_scene, rendered_scene in zip(storyboard.get("scenes", []), scenes_with_clips):
+            sb_scene["_visual_source"] = rendered_scene.get("source")
     else:
         scenes_with_clips = scenes_with_times
 
     caption_style = default_caption_style_for(render_style, persona_key)
     caption_style.words_per_card = 3
     caption_cards = build_caption_cards(voice_result["word_timestamps"], style=caption_style)
-    export_srt(caption_cards, os.path.join(job_output_dir, f"{job_id}.srt"))
+    srt_path = os.path.join(job_output_dir, f"{job_id}.srt")
+    export_srt(caption_cards, srt_path)
+    # Read back the content (not just the path) so it can ride along in the
+    # video row and get uploaded as a REAL YouTube caption track at publish
+    # time. Without this, subtitle_engine's own docstring promise — "useful
+    # ... as a YouTube subtitle upload" — was never actually kept: the file
+    # was written, then discarded when the render job's runner was torn
+    # down, since generate and publish run on separate GitHub Actions jobs
+    # with no shared filesystem.
+    try:
+        with open(srt_path, "r", encoding="utf-8") as f:
+            captions_srt = f.read()
+    except Exception as e:
+        print(f"[orchestrator] \u26a0 Could not read back the SRT for storage ({e}); "
+              f"burned-in captions are unaffected, only the real-caption upload will be skipped.")
+        captions_srt = None
 
     mixed_audio_path = os.path.join(job_output_dir, f"{job_id}_mixed.mp3")
     mix_audio(
@@ -698,6 +722,7 @@ def _render_pipeline(
         "hashtags": storyboard["hashtags"], "duration": total_duration,
         "storyboard": storyboard,
         "quality": gates,
+        "captions_srt": captions_srt,
     }
 
 
@@ -768,6 +793,7 @@ def _save_and_finalize(db, result, job_id, topic_id, tone_id, render_style, tone
         "quality_verdict": gates.get("verdict"),
         "status": initial_status,
         "storyboard": json.dumps(result["storyboard"]),
+        "captions_srt": result.get("captions_srt"),
         "flags": flags or None,  # native dict, NOT json.dumps() — see VideoQueue.jsx, which reads this as an object
         "created_at": datetime.now(timezone.utc).isoformat(),
     }).execute()

@@ -107,7 +107,7 @@ def fetch_clip_for_scene(
         data = resp.json()
     except requests.RequestException as e:
         print(f"[visual_fetcher] \u26a0 Pexels API error: {e}. Using fallback.")
-        return _get_fallback(job_id, scene_number)
+        return _get_fallback(job_id, scene_number, visual_keyword, scene_text, duration_needed)
 
     videos = data.get("videos", [])
     clip = _select_best_clip(videos, duration_needed, exclude_video_ids, scene_text, visual_keyword)
@@ -126,7 +126,7 @@ def fetch_clip_for_scene(
 
     if not clip:
         print(f"[visual_fetcher] \u26a0 Still no usable results. Using fallback.")
-        return _get_fallback(job_id, scene_number)
+        return _get_fallback(job_id, scene_number, visual_keyword, scene_text, duration_needed)
 
     # ── Download Clip ─────────────────────────────────────────────────────────
     video_url = clip["url"]
@@ -142,7 +142,7 @@ def fetch_clip_for_scene(
         print(f"[visual_fetcher] \u2713 Saved to cache: {cached_path}")
     except Exception as e:
         print(f"[visual_fetcher] \u26a0 Download failed: {e}. Using fallback.")
-        return _get_fallback(job_id, scene_number)
+        return _get_fallback(job_id, scene_number, visual_keyword, scene_text, duration_needed)
 
     return {
         "clip_path": cached_path, "source": "pexels",
@@ -295,8 +295,32 @@ def _select_best_clip(videos: list, duration_needed: float, exclude_video_ids: s
     return pool[0] if pool else None
 
 
-def _get_fallback(job_id: str, scene_number: int) -> dict:
-    """Returns a fallback indicator when no clip is found."""
+def _get_fallback(job_id: str, scene_number: int, visual_keyword: str = "",
+                  scene_text: str = "", duration_needed: float = 6.0) -> dict:
+    """Returns a fallback indicator when no Pexels clip is found.
+
+    Tries the free Hugging Face image-generation backup FIRST (see
+    engine/backup_visuals.py) — an on-topic AI image beats a generic flat
+    gradient. Only drops to the gradient if that also isn't configured or
+    also fails; either way this function never raises, matching the
+    contract every caller above already expects.
+    """
+    try:
+        from engine import backup_visuals
+        if backup_visuals.available():
+            os.makedirs(CLIP_CACHE_DIR, exist_ok=True)
+            gen_path = os.path.join(CLIP_CACHE_DIR, f"{job_id}_s{scene_number}_ai.mp4")
+            if backup_visuals.generate_scene_visual(visual_keyword, scene_text,
+                                                     duration_needed, gen_path):
+                return {
+                    "clip_path": gen_path, "source": "ai_generated",
+                    "keyword_used": visual_keyword or "ai_generated",
+                    "pexels_video_id": None,
+                }
+    except Exception as e:
+        print(f"[visual_fetcher] \u26a0 AI-generated visual backup failed ({e}). "
+              f"Using the gradient fallback instead.")
+
     return {
         "clip_path":    None,
         "source":       FALLBACK_CLIP_TYPE,

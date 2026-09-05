@@ -267,6 +267,70 @@ def _save_token(credentials):
 
 # ─── Core Upload Function ──────────────────────────────────────────────────────
 
+def upload_captions(video_id: str, srt_content: str, creds_override: dict = None,
+                    language: str = "en") -> dict:
+    """Uploads a real, native YouTube caption track for a video that already
+    has one from subtitle_engine's export_srt().
+
+    WHY THIS IS SEPARATE FROM THE BURNED-IN CAPTIONS: the word-highlight text
+    baked into the video frames is for engagement — it's what makes someone
+    stop scrolling. This is for the two things burned-in text can never do:
+    screen readers can read it, and it's the transcript YouTube actually
+    indexes for search. They render completely differently to a viewer —
+    this track is OFF by default, the same as on any other YouTube video,
+    and only appears if someone explicitly turns captions on. It never
+    duplicates or fights with the on-screen animated text.
+
+    Best-effort by design: this is called after the real video upload has
+    already succeeded, so a caption failure must never look like the publish
+    itself failed. Logs a warning and returns a failure marker instead of
+    raising.
+    """
+    if not srt_content or not srt_content.strip():
+        return {"status": "skipped", "reason": "no caption content on this video"}
+
+    import tempfile
+
+    try:
+        youtube = get_authenticated_service(creds_override)
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".srt", delete=False,
+                                          encoding="utf-8") as f:
+            f.write(srt_content)
+            tmp_path = f.name
+
+        try:
+            media = MediaFileUpload(tmp_path, mimetype="application/octet-stream")
+            request = youtube.captions().insert(
+                part="snippet",
+                body={
+                    "snippet": {
+                        "videoId": video_id,
+                        "language": language,
+                        "name": "",       # empty = the default/unnamed track, shown simply as the language
+                        "isDraft": False,  # published immediately, not left as a hidden draft
+                    }
+                },
+                media_body=media,
+                # Timings already come from edge-tts's own ground truth (or a
+                # syllable estimate as a fallback) — sync=True would tell
+                # YouTube to try to re-align them itself, which is a step
+                # backward from timing we already trust.
+                sync=False,
+            )
+            response = request.execute()
+            print(f"[publisher] \u2713 Real captions uploaded for {video_id} "
+                  f"(track id: {response.get('id', '?')})")
+            return {"status": "uploaded", "caption_id": response.get("id")}
+        finally:
+            os.unlink(tmp_path)
+
+    except Exception as e:
+        print(f"[publisher] \u26a0 Caption upload failed for {video_id} ({e}). "
+              f"The video itself published fine — only the real caption track is missing. "
+              f"Burned-in captions are unaffected.")
+        return {"status": "failed", "error": str(e)}
+
+
 def upload_video(
     video_path: str,
     title: str,
@@ -276,6 +340,7 @@ def upload_video(
     privacy: str = "public",
     notify_subscribers: bool = False,
     creds_override: dict = None,
+    captions_srt: str = None,
 ) -> dict:
     """
     Uploads a video to YouTube as a Short.
@@ -290,6 +355,11 @@ def upload_video(
         notify_subscribers:   Whether to notify subscribers (default False for batch uploads)
         creds_override:       Per-channel OAuth credentials from engine/channels.py.
                               None uses the default YOUTUBE_* environment variables.
+        captions_srt:         Optional real .srt content (from subtitle_engine.export_srt,
+                              stored on the video row). If given, uploaded as a REAL YouTube
+                              caption track after the video itself is live — see
+                              upload_captions() for why this is a separate, best-effort step
+                              and how it differs from the burned-in on-screen captions.
 
     Returns:
         {"video_id": "...", "url": "https://youtube.com/shorts/...", "status": "uploaded"}
@@ -366,11 +436,16 @@ def upload_video(
     print(f"[publisher] Video ID: {video_id}")
     print(f"[publisher] URL: {url}")
 
+    caption_result = None
+    if captions_srt:
+        caption_result = upload_captions(video_id, captions_srt, creds_override=creds_override)
+
     return {
         "video_id": video_id,
         "url":      url,
         "status":   "uploaded",
         "title":    title,
+        "captions": caption_result,
     }
 
 

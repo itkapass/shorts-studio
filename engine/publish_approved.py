@@ -196,6 +196,7 @@ def run_publish_pipeline():
                 privacy="public",
                 notify_subscribers=False,
                 creds_override=creds,
+                captions_srt=row.get("captions_srt"),
             )
 
             db.table("videos").update({

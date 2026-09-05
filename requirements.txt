@@ -79,3 +79,19 @@ boto3>=1.34.0
 # push the counter back onto a fixed offset and re-introduce the bug this
 # release exists to fix.
 tzdata>=2024.1
+
+# ── Semantic duplicate detection (optional but installed by default) ──────
+# Adds a THIRD duplicate-detection signal alongside the existing TF-IDF and
+# keyword-overlap checks: real semantic similarity, catching a paraphrase
+# that shares almost no vocabulary with something already made. See
+# engine/concept_memory.py's module docstring for what this catches that
+# the other two signals can't.
+#
+# HONEST COST: this pulls in torch as a dependency, which adds roughly
+# 300-800MB to the install and a couple of minutes to the first `pip
+# install` in a fresh environment. engine/concept_memory.py degrades
+# gracefully to the original two signals if this package is missing or
+# fails to load for any reason — it is never a hard requirement for the
+# pipeline to run. Remove this line if you'd rather keep installs light and
+# accept the smaller gap it closes.
+sentence-transformers>=3.0.0

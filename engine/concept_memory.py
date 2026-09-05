@@ -18,13 +18,23 @@ So this works one level up, on the CONCEPT rather than the script:
     anything above the similarity ceiling is rejected before it is ever
     rendered (rejecting at render time would waste the expensive step).
 
-TWO SIMILARITY SIGNALS, DELIBERATELY
+THREE SIMILARITY SIGNALS, DELIBERATELY
   1. Lexical (TF-IDF cosine) — catches rewordings of the same sentence.
   2. Topical (keyword-set Jaccard) — catches the same subject approached from
      a different angle, which is exactly what signal 1 misses.
-A concept is a duplicate if EITHER fires. Using only the first is the mistake
-the old duplicate_check made; using only the second would reject legitimately
-different videos that happen to share nouns.
+  3. Semantic (sentence-embedding cosine) — catches the gap BOTH of the above
+     miss: two concepts that share almost no vocabulary at all and still
+     mean the same thing. "Why phone batteries wear out" and "The chemistry
+     behind your phone losing charge capacity over time" share one real
+     keyword ("phone") and very little exact wording, so 1 and 2 both miss
+     it — an embedding model, trained to place similar MEANINGS near each
+     other regardless of the words used to express them, catches it.
+     Optional: needs `sentence-transformers` installed. Degrades to the
+     first two signals alone if it isn't, or if the model fails to load for
+     any reason — this must never be the thing that breaks a generation run.
+A concept is a duplicate if ANY signal fires. Using only lexical is the
+mistake the old duplicate_check made; using only lexical+topical still
+misses genuine paraphrases, which is exactly the gap signal 3 closes.
 
 THE LEDGER IS A REAL FILE, ON PURPOSE
 `concepts.jsonl` is committed to the repo by the workflow, so you can open it,
@@ -43,6 +53,12 @@ from engine.config import get
 # Above either of these, a new concept is treated as a repeat.
 LEXICAL_CEILING = 0.50    # TF-IDF cosine on title + premise
 TOPICAL_CEILING = 0.32    # keyword overlap (see _topical_similarity)
+# A third, optional signal — see _semantic_similarity below for what it
+# catches that the two lexical/topical signals above cannot. 0.72 on
+# all-MiniLM-L6-v2 cosine similarity is a conservative starting point (real
+# duplicates tend to land well above 0.8; unrelated topics sit under 0.4) —
+# treat this as a first cut to tune against real output, not a settled number.
+SEMANTIC_CEILING = 0.72
 LOOKBACK_DAYS = 120       # concepts older than this stop blocking new ones
 LEDGER_PATH = "concepts.jsonl"
 
@@ -98,6 +114,75 @@ def _topical_similarity(a: set, b: set) -> float:
     jaccard = inter / len(a | b)
     overlap = inter / min(len(a), len(b))
     return max(jaccard, overlap)
+
+
+# Loaded once per process, not once per call — check_concept() can run many
+# times in one generation batch, and re-loading a ~80MB model from disk on
+# every single call would be the kind of hidden cost that quietly makes
+# rendering slower without ever showing up as an obvious bug. None means
+# "not loaded yet"; False means "tried and it isn't available" so later
+# calls don't keep retrying a doomed import.
+_embedder = None
+
+
+def _get_embedder():
+    global _embedder
+    if _embedder is False:
+        return None
+    if _embedder is not None:
+        return _embedder
+    try:
+        from sentence_transformers import SentenceTransformer
+        # all-MiniLM-L6-v2: ~80MB, fast enough to run on a GitHub Actions
+        # CPU runner in well under a second per comparison, and a standard,
+        # well-trusted choice for exactly this kind of short-text semantic
+        # similarity task — not the biggest or newest model, but the right
+        # size for "does this idea already exist," not a research bake-off.
+        _embedder = SentenceTransformer("all-MiniLM-L6-v2")
+        return _embedder
+    except Exception as e:
+        print(f"[concept_memory] \u2139 Semantic similarity unavailable ({e}); "
+              f"using lexical + topical only. Install with: "
+              f"pip install sentence-transformers")
+        _embedder = False
+        return None
+
+
+def _semantic_similarity(new_text: str, ledger: list) -> tuple:
+    """Best cosine similarity between the new concept and anything in the
+    ledger, using sentence embeddings rather than shared words.
+
+    Returns (best_score, matched_title). (0.0, None) if the embedder isn't
+    available or the ledger/text is empty — the same shape as a real "no
+    match found," so callers don't need a separate branch for "the check
+    didn't run" versus "the check ran and found nothing."
+    """
+    model = _get_embedder()
+    if not model or not new_text or not ledger:
+        return 0.0, None
+
+    try:
+        corpus = [f"{r.get('title','')} {r.get('premise','')}".strip() for r in ledger]
+        valid = [(i, c) for i, c in enumerate(corpus) if c]
+        if not valid:
+            return 0.0, None
+
+        texts = [c for _, c in valid] + [new_text]
+        embeddings = model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
+
+        import numpy as np
+        new_vec = embeddings[-1]
+        corpus_vecs = embeddings[:-1]
+        sims = corpus_vecs @ new_vec  # normalized vectors -> dot product IS cosine similarity
+
+        best_i = int(np.argmax(sims))
+        best_score = float(sims[best_i])
+        best_title = ledger[valid[best_i][0]].get("title")
+        return best_score, best_title
+    except Exception as e:
+        print(f"[concept_memory] \u26a0 Semantic check failed mid-run ({e}); "
+              f"continuing with lexical + topical only.")
+        return 0.0, None
 
 
 def concept_signature(storyboard: dict) -> dict:
@@ -252,6 +337,9 @@ def check_concept(storyboard: dict, ledger: list = None, db=None) -> dict:
     except Exception as e:
         print(f"[concept_memory] ⚠ Lexical check unavailable ({e}); using topical only.")
 
+    new_text_for_semantic = f"{sig['title']} {sig['premise']}".strip()
+    best_semantic, best_semantic_title = _semantic_similarity(new_text_for_semantic, ledger)
+
     if best_topical >= TOPICAL_CEILING:
         return {
             "is_repeat": True, "score": round(best_topical, 3), "reason": "same subject matter",
@@ -262,10 +350,17 @@ def check_concept(storyboard: dict, ledger: list = None, db=None) -> dict:
             "is_repeat": True, "score": round(best_lexical, 3), "reason": "near-identical premise",
             "matched_title": best_lexical_title, "signature": sig,
         }
+    if best_semantic >= SEMANTIC_CEILING:
+        return {
+            "is_repeat": True, "score": round(best_semantic, 3),
+            "reason": "same idea, different wording (caught by semantic similarity, "
+                      "not shared vocabulary)",
+            "matched_title": best_semantic_title, "signature": sig,
+        }
 
     return {
         "is_repeat": False,
-        "score": round(max(best_topical, best_lexical), 3),
+        "score": round(max(best_topical, best_lexical, best_semantic), 3),
         "reason": "", "matched_title": None, "signature": sig,
     }
 
