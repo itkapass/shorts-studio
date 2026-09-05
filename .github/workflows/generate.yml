@@ -57,6 +57,25 @@ on:
         required: false
         type: boolean
         default: false
+      persona:
+        description: "Restrict to one channel's topics only (blank = any channel, the normal behavior)."
+        required: false
+        type: choice
+        default: ""
+        options:
+          - ""
+          - tech_science_explainer
+          - comedy_skits
+          - top10_and_facts
+          - motivation_and_discipline
+          - what_if_physics
+          - awareness_comedy
+          - everyday_origins
+          - quotes_and_poetry
+      topic_id:
+        description: "Advanced: generate exactly this one topic id (from Topic Studio), ignoring the persona filter above and any count."
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -144,10 +163,15 @@ jobs:
             ARGS="$ARGS --skip-topics"
           fi
           if [ -n "${{ inputs.manual_count }}" ]; then
-            python -m engine.orchestrator --count "${{ inputs.manual_count }}" $ARGS
-          else
-            python -m engine.orchestrator $ARGS
+            ARGS="$ARGS --count ${{ inputs.manual_count }}"
           fi
+          if [ -n "${{ inputs.persona }}" ]; then
+            ARGS="$ARGS --persona ${{ inputs.persona }}"
+          fi
+          if [ -n "${{ inputs.topic_id }}" ]; then
+            ARGS="$ARGS --topic-id ${{ inputs.topic_id }}"
+          fi
+          python -m engine.orchestrator $ARGS
 
       # ── 7. Safety net: retry-upload anything that didn't already upload ──
       # orchestrator.py uploads each video right after rendering it (with

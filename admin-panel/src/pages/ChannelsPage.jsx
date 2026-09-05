@@ -17,6 +17,7 @@
 import { useEffect, useState } from 'react'
 import { Plus, Trash2, Save, AlertTriangle, Radio, Hand } from 'lucide-react'
 import { supabase, isSupabaseConfigured } from '../lib/supabase'
+import { PERSONAS, PERSONAS_META } from '../lib/personas'
 
 const CATEGORIES = [
   { key: 'informative',   label: 'Unknown Facts' },
@@ -31,59 +32,6 @@ const CATEGORIES = [
   { key: 'observational', label: 'Observational' },
 ]
 
-const PERSONAS = [
-  ['', 'None — pick categories manually below'],
-  ['tech_science_explainer', 'Tech, Science & How Things Work'],
-  ['comedy_skits', 'Comedy, Dark Humour & Life Sketches'],
-  ['top10_and_facts', 'Top 10s, Records & Strange True Things'],
-  ['motivation_and_discipline', 'Motivation, Discipline & Wellbeing'],
-  ['what_if_physics', 'What If — Real Science, Absurd Questions'],
-  ['awareness_comedy', 'Awareness Through Comedy'],
-  ['everyday_origins', 'Why Ordinary Things Are The Way They Are'],
-  // Was missing entirely — this dropdown is a hand-copied list, not read
-  // live from engine/personas.py, so when a persona was added there this
-  // list silently fell out of sync and quietly had no way to say so. There
-  // was no error, just one option that could never appear. If you add a
-  // 9th persona later, it has to be added HERE too, by hand — nothing
-  // enforces the two lists staying in sync.
-  ['quotes_and_poetry', 'Tamil Words, Wisdom & Original Lines'],
-]
-
-const PERSONAS_META = {
-  tech_science_explainer: {
-    categories: ['informative', 'myth_busting', 'life_hack'],
-    description: 'Explains one real tech, science, or how-things-work concept per video.',
-  },
-  comedy_skits: {
-    categories: ['dark_humour', 'sarcasm', 'absurd', 'observational', 'relatable'],
-    description: 'Animated character skits about ordinary life — work, relationships, group chats.',
-  },
-  top10_and_facts: {
-    categories: ['informative', 'myth_busting'],
-    description: 'Rankings, records, and strange true facts people actually trade at 3am.',
-  },
-  motivation_and_discipline: {
-    categories: ['informative', 'wholesome', 'life_hack'],
-    description: 'Discipline, training and wellbeing, grounded in a real mechanism, never a flat quote card.',
-  },
-  what_if_physics: {
-    categories: ['informative', 'absurd', 'myth_busting'],
-    description: 'Absurd hypotheticals answered with real science — the question hooks, the true answer pays off.',
-  },
-  awareness_comedy: {
-    categories: ['sarcasm', 'absurd', 'observational', 'myth_busting'],
-    description: 'Climate, population and resources landed through comedy instead of lecturing.',
-  },
-  everyday_origins: {
-    categories: ['informative', 'myth_busting', 'life_hack'],
-    description: 'Why ordinary objects are the way they are. Effectively inexhaustible.',
-  },
-  quotes_and_poetry: {
-    categories: ['informative', 'wholesome', 'myth_busting', 'life_hack'],
-    description: 'Tamil proverbs, tongue twisters, folk sayings and slang alongside original '
-      + 'aphorisms and short poems — real strands must be genuinely real, original ones genuinely new.',
-  },
-}
 
 const BLANK = {
   name: '', handle: '', persona_key: '', categories: [], publish_mode: 'manual',

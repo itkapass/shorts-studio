@@ -88,7 +88,9 @@ def get_supabase() -> Client:
 # ─── Core Pipeline ────────────────────────────────────────────────────────────
 
 def run_generation_pipeline(manual_count: int = None, skip_topics: bool = False,
-                            topics_only: bool = False):
+                            topics_only: bool = False, persona_key_filter: str = None,
+                            topic_id: str = None, topics_for_persona: str = None,
+                            topics_count: int = None):
     """Main entry point for generation.
 
     REWORKED FROM A SINGLE DAILY BATCH TO A SPREAD SCHEDULE.
@@ -144,6 +146,11 @@ def run_generation_pipeline(manual_count: int = None, skip_topics: bool = False,
         videos_this_run = min(remaining_today, per_run)
         print(f"[orchestrator] Daily target {daily_target}, {made_today} made today already, "
               f"{remaining_today} remaining. This run will attempt {videos_this_run}.")
+
+    if topic_id:
+        # One exact topic was hand-picked — that IS the request, regardless
+        # of manual_count or the daily schedule's usual math.
+        videos_this_run = 1
 
         if videos_this_run < 1:
             print("[orchestrator] Today's target is already met. Nothing to do this run — "
@@ -202,11 +209,32 @@ def run_generation_pipeline(manual_count: int = None, skip_topics: bool = False,
             budgets_by_key[key_id] = b
         return budgets_by_key[key_id], api_key
 
+    if topics_for_persona:
+        # The manual, targeted version of topic top-up: "invent N topics for
+        # THIS channel, right now," regardless of how deep its pool already
+        # is. Distinct from the automatic top-up below, which only ever acts
+        # when a pool has run thin — see topic_synthesizer.force_add_topics
+        # for why these are two functions instead of one with a flag.
+        budget, api_key = budget_for_persona(topics_for_persona)
+        result = topic_synthesizer.force_add_topics(
+            topics_for_persona, topics_count or topic_synthesizer.MIN_POOL_SIZE,
+            db, api_key=api_key, budget=budget,
+        )
+        step_summary.topics_added({topics_for_persona: result})
+        if result.get("added"):
+            alerts.alert(
+                f"{result['added']} topic(s) added to {result.get('label', topics_for_persona)}",
+                "\n".join(f"- {t['name']} ({t['source']})" for t in result.get("topics", [])),
+                severity="info", force=True,
+            )
+        return
+
     # Top up any persona's topic pool that has run low, BEFORE loading topics
     # for this run, so newly synthesized ones are immediately eligible.
     topic_results = {}
-    if skip_topics:
-        print("[orchestrator] Topic top-up skipped for this run (--skip-topics).")
+    if skip_topics or topic_id:
+        print("[orchestrator] Topic top-up skipped for this run "
+              + ("(--skip-topics)." if skip_topics else "(a specific topic was hand-picked)."))
     else:
         try:
             topic_results = topic_synthesizer.ensure_all_active_persona_pools(
@@ -238,21 +266,90 @@ def run_generation_pipeline(manual_count: int = None, skip_topics: bool = False,
             )
         return
 
-    topics = db.table("topics").select("*").eq("is_active", True).execute().data
+    topics_query = db.table("topics").select("*").eq("is_active", True)
+    if persona_key_filter:
+        # A manual, targeted run: "generate for THIS channel/persona only,"
+        # not whatever the shuffled full pool happens to land on.
+        topics_query = topics_query.eq("persona_key", persona_key_filter)
+    if topic_id:
+        # The most targeted case: one exact topic, chosen by hand in the
+        # dashboard rather than left to the pool. persona_key_filter is
+        # ignored when this is set — a specific topic already IS a specific
+        # persona, filtering by both would only risk an empty result if
+        # they ever disagreed.
+        topics_query = db.table("topics").select("*").eq("id", topic_id)
+    topics = topics_query.execute().data
     tones = db.table("tones").select("*").eq("is_active", True).execute().data
+
+    # Exclude topics that already produced a real video. THIS WAS MISSING
+    # ENTIRELY — the query above selects every active topic every single
+    # run with no concept of "already used," so once a persona's pool of
+    # genuinely fresh ideas ran out, the same handful of topics kept getting
+    # reshuffled and re-picked forever. Each repeat still cost a full
+    # creative-brief + storyboard Gemini call before concept_memory's
+    # duplicate check caught it and threw the attempt away — meaning a
+    # real, growing share of the daily Gemini budget was being spent on
+    # attempts that were guaranteed to fail before they even started,
+    # crowding out genuinely new topics that might otherwise have fit in
+    # the same budget.
+    #
+    # A topic whose only history is a FAILED attempt stays eligible — that
+    # failure was Gemini's quota or a 503, not evidence the idea itself was
+    # bad, so it deserves a real retry rather than being written off.
+    if topics and not topic_id:
+        # Skipped entirely when a specific topic_id was hand-picked — if
+        # someone deliberately chose exactly this topic, most likely they
+        # want it made (or remade) regardless of whether it already
+        # produced something, not silently filtered back out.
+        topic_ids = [t["id"] for t in topics]
+        used_rows = (
+            db.table("videos").select("topic_id")
+            .in_("topic_id", topic_ids)
+            .neq("status", "failed")
+            .execute().data
+        ) or []
+        used_topic_ids = {r["topic_id"] for r in used_rows if r.get("topic_id")}
+        if used_topic_ids:
+            before = len(topics)
+            topics = [t for t in topics if t["id"] not in used_topic_ids]
+            print(f"[orchestrator] Excluded {before - len(topics)} already-used topic(s) "
+                  f"from selection — {len(topics)} genuinely fresh topic(s) remain.")
 
     # These two are the quietest failure in the whole system: with nothing
     # active, generation completes "successfully" having produced nothing, and
     # the only trace is one line in a log nobody reads. It has to alert.
     if not topics:
-        alerts.alert(
-            "No videos generated — every topic is turned off",
-            "The daily run found zero ACTIVE topics, so it produced nothing.\n\n"
-            "Fix: open your dashboard -> Topic Studio and switch at least one topic "
-            "back on. The next scheduled run will pick it up, or run 'Generate Videos' "
-            "from the Actions tab to go now.",
-            severity="critical",
-        )
+        if topic_id:
+            print(f"[orchestrator] Topic id {topic_id} was not found, or is no longer active. "
+                  f"Nothing to generate.")
+            alerts.alert(
+                "Manual video request found no topic",
+                f"Topic id {topic_id} was not found or is inactive — nothing was generated.",
+                severity="warn",
+            )
+        elif persona_key_filter:
+            label = (personas_mod.get_persona(persona_key_filter) or {}).get("label", persona_key_filter)
+            print(f"[orchestrator] No active, unused topics for '{label}'. Nothing to generate. "
+                  f"Try 'Add Topics Now' for this channel first.")
+            alerts.alert(
+                f"No topics available for {label}",
+                f"A manual video request for '{label}' found no active, unused topics.\n\n"
+                f"Fix: press 'Add Topics Now' for this channel, then try generating again.",
+                severity="warn",
+            )
+        else:
+            # These two are the quietest failure in the whole system: with
+            # nothing active, generation completes "successfully" having
+            # produced nothing, and the only trace is one line in a log
+            # nobody reads. It has to alert.
+            alerts.alert(
+                "No videos generated — every topic is turned off",
+                "The daily run found zero ACTIVE topics, so it produced nothing.\n\n"
+                "Fix: open your dashboard -> Topic Studio and switch at least one topic "
+                "back on. The next scheduled run will pick it up, or run 'Generate Videos' "
+                "from the Actions tab to go now.",
+                severity="critical",
+            )
         return
     if not tones:
         alerts.alert(
@@ -959,12 +1056,27 @@ if __name__ == "__main__":
     _p.add_argument("--skip-topics", action="store_true",
                      help="Generate videos from the existing topic pool without "
                           "inventing new ones. Saves Gemini calls.")
+    _p.add_argument("--persona", type=str, default=None,
+                     help="Restrict generation to one persona/channel's topics only.")
+    _p.add_argument("--topic-id", type=str, default=None,
+                     help="Generate exactly one video for this specific topic id, "
+                          "bypassing pool selection and the daily schedule's count.")
+    _p.add_argument("--topics-for", type=str, default=None,
+                     help="Invent topics for exactly one persona right now, regardless "
+                          "of current pool depth, then stop (no rendering). Pair with "
+                          "--topics-count.")
+    _p.add_argument("--topics-count", type=int, default=None,
+                     help="How many topics to invent with --topics-for (default: 15).")
     _args, _ = _p.parse_known_args()
+    if _args.topics_for:
+        run_generation_pipeline(topics_for_persona=_args.topics_for, topics_count=_args.topics_count)
+        raise SystemExit(0)
     if _args.topics_only:
         run_generation_pipeline(topics_only=True)
         raise SystemExit(0)
-    if _args.count is not None or _args.skip_topics:
-        run_generation_pipeline(manual_count=_args.count, skip_topics=_args.skip_topics)
+    if _args.count is not None or _args.skip_topics or _args.persona or _args.topic_id:
+        run_generation_pipeline(manual_count=_args.count, skip_topics=_args.skip_topics,
+                                persona_key_filter=_args.persona, topic_id=_args.topic_id)
         raise SystemExit(0)
     parser = argparse.ArgumentParser(description="AI Video Pipeline Orchestrator")
     parser.add_argument("--prompt", type=str, help="Generate AND render a custom video for a specific prompt (regenerates the storyboard from scratch)")

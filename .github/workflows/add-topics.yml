@@ -29,6 +29,26 @@ on:
   # Manual: Actions tab -> Add Topics -> Run workflow.
   # Or press "Add Topics Now" on the dashboard.
   workflow_dispatch:
+    inputs:
+      persona:
+        description: "Leave as 'All channels' for the normal top-up, or pick one channel to force-add topics for it specifically, regardless of its current pool depth."
+        required: false
+        type: choice
+        default: ""
+        options:
+          - ""
+          - tech_science_explainer
+          - comedy_skits
+          - top10_and_facts
+          - motivation_and_discipline
+          - what_if_physics
+          - awareness_comedy
+          - everyday_origins
+          - quotes_and_poetry
+      count:
+        description: "Only used when a specific channel is picked above: how many topics to add (default 15, max 20)."
+        required: false
+        default: ""
 
 jobs:
   topics:
@@ -78,7 +98,15 @@ jobs:
           OUTPUT_DIR:           /tmp/shorts_output
           ASSETS_DIR:           assets
         run: |
-          python -m engine.orchestrator --topics-only
+          if [ -n "${{ inputs.persona }}" ]; then
+            ARGS="--topics-for ${{ inputs.persona }}"
+            if [ -n "${{ inputs.count }}" ]; then
+              ARGS="$ARGS --topics-count ${{ inputs.count }}"
+            fi
+            python -m engine.orchestrator $ARGS
+          else
+            python -m engine.orchestrator --topics-only
+          fi
 
       - name: Alert on failure
         if: failure()

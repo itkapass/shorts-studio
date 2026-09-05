@@ -370,16 +370,29 @@ def _backup_reachable_despite_local_budget():
 # ── 18. Every real persona is selectable on the Channels page ──────────────
 def _channels_dropdown_complete():
     from engine import personas
-    jsx = open("admin-panel/src/pages/ChannelsPage.jsx", encoding="utf-8").read()
-    missing = [k for k in personas.PERSONAS if f"'{k}'" not in jsx]
+    # As of this check, the persona list lives in ONE shared frontend file
+    # (admin-panel/src/lib/personas.js), imported by both ChannelsPage.jsx
+    # and ManualControls.jsx — specifically so this exact bug (one copy
+    # updated, a second hand-copied one quietly left behind) can't happen
+    # a second time. This check still only catches drift on the Python ->
+    # JS boundary, which is unavoidable without generating the JS file.
+    js_path = "admin-panel/src/lib/personas.js"
+    if not os.path.exists(js_path):
+        raise RuntimeError(f"{js_path} is missing — persona list has no shared source")
+    js = open(js_path, encoding="utf-8").read()
+    missing = [k for k in personas.PERSONAS if f"'{k}'" not in js]
     if missing:
         raise RuntimeError(
-            f"ChannelsPage.jsx's hardcoded PERSONAS list is missing: {missing}. "
-            f"This list is hand-copied from engine/personas.py, not read live from "
-            f"it, so a persona that exists in the backend can be completely "
-            f"unselectable in the dashboard with no error anywhere."
+            f"{js_path} is missing: {missing}. This is the ONE shared list the "
+            f"dashboard's persona dropdowns read from — a persona that exists in "
+            f"the backend can be completely unselectable with no error anywhere."
         )
-    return f"all {len(personas.PERSONAS)} personas are present in the dropdown"
+    for consumer in ["admin-panel/src/pages/ChannelsPage.jsx",
+                     "admin-panel/src/components/ManualControls.jsx"]:
+        c = open(consumer, encoding="utf-8").read()
+        if "from '../lib/personas'" not in c:
+            raise RuntimeError(f"{consumer} does not import the shared persona list")
+    return f"all {len(personas.PERSONAS)} personas in one shared file, imported by both consumers"
 
 
 if __name__ == "__main__":

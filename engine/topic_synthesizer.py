@@ -287,99 +287,7 @@ def ensure_persona_topic_pool(persona_key: str, db, min_pool: int = MIN_POOL_SIZ
         print(f"[topic_synthesizer] Pool for '{persona['label']}' is at "
               f"{len(unused)}/{min_pool} fresh topic(s) \u2014 synthesizing {needed} more.")
 
-        ledger = cm.load_ledger(db=db)
-        all_topic_names = {
-            t["name"].strip().lower()
-            for t in (db.table("topics").select("name").execute().data or [])
-        }
-
-        rotation = datetime.now(timezone.utc).timetuple().tm_yday
-        ideas = synthesize_topics(persona_key, needed, all_topic_names, ledger, rotation,
-                                  api_key=api_key, budget=budget)
-
-        # Track how many ideas actually came from Gemini vs the static seed
-        # list, and TAG THEM DIFFERENTLY. Both used to be inserted under the
-        # identical 'persona-auto' label, which quietly hid a real problem:
-        # while Gemini's quota was being exhausted elsewhere in the pipeline,
-        # every single "synthesized" topic was actually a seed-list fallback,
-        # and there was no way to tell from the dashboard. Now the Topic
-        # Studio badge shows the difference honestly.
-        gemini_invented_count = len(ideas)
-
-        # Fall back to unused seed topics if the model call failed or returned
-        # too few — a persona must never go dry because one API call had a bad
-        # day. This matters more now that Gemini 503s are common.
-        if len(ideas) < needed:
-            for seed in persona["seed_topics"]:
-                if seed.strip().lower() not in all_topic_names:
-                    ideas.append({"name": seed, "description": ""})
-                if len(ideas) >= needed:
-                    break
-
-        added = 0
-        added_from_gemini = 0
-        added_from_groq = 0
-        added_names = []   # for the GitHub Actions step summary / Telegram digest
-        for idx, idea in enumerate(ideas[:needed]):
-            key = idea["name"].strip().lower()
-            if key in all_topic_names:
-                continue
-            # Anything past index `gemini_invented_count` is a seed-fallback
-            # insertion, not a real model invention — label it honestly.
-            # Anything BEFORE it came from a real model call, but which one?
-            # `_provider` (set in synthesize_topics) tells us — a topic
-            # invented by the Groq backup is just as genuinely new as one
-            # from Gemini, but it did not come from the primary model, and
-            # this project's whole philosophy is to never blur that
-            # distinction behind a single ambiguous badge.
-            is_real = idx < gemini_invented_count
-            from_groq = is_real and idea.get("_provider") == "groq"
-            if is_real:
-                added_by = "persona-auto-groq" if from_groq else "persona-auto"
-            else:
-                added_by = "persona-seed-fallback"
-            try:
-                db.table("topics").insert({
-                    "name": idea["name"],
-                    "description": idea.get("description") or "",
-                    "persona_key": persona_key,
-                    "is_active": True,
-                    "added_by": added_by,
-                }).execute()
-                all_topic_names.add(key)
-                added += 1
-                added_from_gemini += 1 if (is_real and not from_groq) else 0
-                added_from_groq += 1 if from_groq else 0
-                added_names.append({
-                    "name": idea["name"],
-                    "source": "groq" if from_groq else ("gemini" if is_real else "seed"),
-                })
-            except Exception as e:
-                print(f"[topic_synthesizer] \u26a0 Could not insert topic {idea['name']!r}: {e}")
-
-        seed_count = added - added_from_gemini - added_from_groq
-        if added_from_groq:
-            print(f"[topic_synthesizer] \u2713 Added {added} topic(s) to '{persona['label']}' "
-                  f"({added_from_gemini} from Gemini, {added_from_groq} from the Groq backup "
-                  f"because Gemini's daily quota was gone, {seed_count} from the seed list).")
-        elif seed_count:
-            print(f"[topic_synthesizer] \u2713 Added {added} topic(s) to '{persona['label']}' "
-                  f"({added_from_gemini} genuinely new from Gemini, "
-                  f"{seed_count} filled in from the seed list because "
-                  f"Gemini synthesis did not return enough — check the Gemini budget log "
-                  f"above if this keeps happening).")
-        else:
-            print(f"[topic_synthesizer] \u2713 Added {added} topic(s) to '{persona['label']}', "
-                  f"all genuinely invented by Gemini.")
-
-        # Returning a dict (not a bare int) is what lets the workflow print a
-        # real "here is exactly what got added" summary instead of just a
-        # count — see the Add Topics workflow's step-summary step.
-        return {
-            "persona": persona_key, "label": persona["label"], "added": added,
-            "from_gemini": added_from_gemini, "from_groq": added_from_groq,
-            "from_seed": seed_count, "topics": added_names,
-        }
+        return _synthesize_and_insert(persona_key, persona, needed, db, api_key, budget)
 
     except api_budget.QuotaExhausted:
         # Must escape. Swallowing this here would recreate the exact bug
@@ -388,6 +296,149 @@ def ensure_persona_topic_pool(persona_key: str, db, min_pool: int = MIN_POOL_SIZ
     except Exception as e:
         print(f"[topic_synthesizer] \u26a0 Pool check failed for '{persona_key}': {e}")
         return _no_op_result(persona_key)
+
+
+def force_add_topics(persona_key: str, count: int, db, api_key: str = None, budget=None) -> dict:
+    """The manual, deliberate version of ensure_persona_topic_pool: invents
+    exactly `count` new topics for ONE persona right now, regardless of how
+    deep its pool already is.
+
+    WHY THIS IS A SEPARATE FUNCTION, NOT A FLAG ON THE AUTOMATIC ONE
+
+    The automatic top-up (above) exists to keep the pool from running dry
+    without anyone watching it — its entire logic is "only act if the pool
+    is thin." A manual "add N topics for this channel" button means the
+    opposite: the person pressing it has already decided they want N new
+    ideas right now, on purpose, whether or not the pool is thin. Bolting
+    that onto ensure_persona_topic_pool as a "force" flag would mean every
+    future reader has to hold both meanings in their head for one function;
+    two small, single-purpose functions sharing the actual synthesis logic
+    (_synthesize_and_insert) reads more clearly than one function with a
+    behavior-flipping flag.
+
+    Capped at SYNTHESIZE_BATCH (20) per call — the same limit the automatic
+    path respects, and for the same reason: it is the most Gemini will
+    reliably return well-reasoned topics for in one request. Asking for
+    more than that returns exactly SYNTHESIZE_BATCH, not a silent partial
+    miss — callers should surface that plainly rather than let someone
+    wonder where the rest went.
+    """
+    persona = personas_mod.get_persona(persona_key)
+    if not persona:
+        return _no_op_result(persona_key)
+
+    count = max(1, min(int(count), SYNTHESIZE_BATCH))
+    print(f"[topic_synthesizer] Manual request: {count} new topic(s) for '{persona['label']}', "
+          f"regardless of current pool depth.")
+    try:
+        return _synthesize_and_insert(persona_key, persona, count, db, api_key, budget)
+    except api_budget.QuotaExhausted:
+        raise
+    except Exception as e:
+        print(f"[topic_synthesizer] \u26a0 Manual topic add failed for '{persona_key}': {e}")
+        return _no_op_result(persona_key)
+
+
+def _synthesize_and_insert(persona_key: str, persona: dict, needed: int, db,
+                           api_key: str = None, budget=None) -> dict:
+    """Shared by ensure_persona_topic_pool (automatic, gated by pool depth)
+    and force_add_topics (manual, unconditional) — the two differ only in
+    how they decide `needed`; everything after that is identical: call the
+    model, fall back to seeds if it comes up short, insert, tag honestly.
+    """
+    ledger = cm.load_ledger(db=db)
+    all_topic_names = {
+        t["name"].strip().lower()
+        for t in (db.table("topics").select("name").execute().data or [])
+    }
+
+    rotation = datetime.now(timezone.utc).timetuple().tm_yday
+    ideas = synthesize_topics(persona_key, needed, all_topic_names, ledger, rotation,
+                              api_key=api_key, budget=budget)
+
+    # Track how many ideas actually came from Gemini vs the static seed
+    # list, and TAG THEM DIFFERENTLY. Both used to be inserted under the
+    # identical 'persona-auto' label, which quietly hid a real problem:
+    # while Gemini's quota was being exhausted elsewhere in the pipeline,
+    # every single "synthesized" topic was actually a seed-list fallback,
+    # and there was no way to tell from the dashboard. Now the Topic
+    # Studio badge shows the difference honestly.
+    gemini_invented_count = len(ideas)
+
+    # Fall back to unused seed topics if the model call failed or returned
+    # too few — a persona must never go dry because one API call had a bad
+    # day. This matters more now that Gemini 503s are common.
+    if len(ideas) < needed:
+        for seed in persona["seed_topics"]:
+            if seed.strip().lower() not in all_topic_names:
+                ideas.append({"name": seed, "description": ""})
+            if len(ideas) >= needed:
+                break
+
+    added = 0
+    added_from_gemini = 0
+    added_from_groq = 0
+    added_names = []   # for the GitHub Actions step summary / Telegram digest
+    for idx, idea in enumerate(ideas[:needed]):
+        key = idea["name"].strip().lower()
+        if key in all_topic_names:
+            continue
+        # Anything past index `gemini_invented_count` is a seed-fallback
+        # insertion, not a real model invention — label it honestly.
+        # Anything BEFORE it came from a real model call, but which one?
+        # `_provider` (set in synthesize_topics) tells us — a topic
+        # invented by the Groq backup is just as genuinely new as one
+        # from Gemini, but it did not come from the primary model, and
+        # this project's whole philosophy is to never blur that
+        # distinction behind a single ambiguous badge.
+        is_real = idx < gemini_invented_count
+        from_groq = is_real and idea.get("_provider") == "groq"
+        if is_real:
+            added_by = "persona-auto-groq" if from_groq else "persona-auto"
+        else:
+            added_by = "persona-seed-fallback"
+        try:
+            db.table("topics").insert({
+                "name": idea["name"],
+                "description": idea.get("description") or "",
+                "persona_key": persona_key,
+                "is_active": True,
+                "added_by": added_by,
+            }).execute()
+            all_topic_names.add(key)
+            added += 1
+            added_from_gemini += 1 if (is_real and not from_groq) else 0
+            added_from_groq += 1 if from_groq else 0
+            added_names.append({
+                "name": idea["name"],
+                "source": "groq" if from_groq else ("gemini" if is_real else "seed"),
+            })
+        except Exception as e:
+            print(f"[topic_synthesizer] \u26a0 Could not insert topic {idea['name']!r}: {e}")
+
+    seed_count = added - added_from_gemini - added_from_groq
+    if added_from_groq:
+        print(f"[topic_synthesizer] \u2713 Added {added} topic(s) to '{persona['label']}' "
+              f"({added_from_gemini} from Gemini, {added_from_groq} from the Groq backup "
+              f"because Gemini's daily quota was gone, {seed_count} from the seed list).")
+    elif seed_count:
+        print(f"[topic_synthesizer] \u2713 Added {added} topic(s) to '{persona['label']}' "
+              f"({added_from_gemini} genuinely new from Gemini, "
+              f"{seed_count} filled in from the seed list because "
+              f"Gemini synthesis did not return enough — check the Gemini budget log "
+              f"above if this keeps happening).")
+    else:
+        print(f"[topic_synthesizer] \u2713 Added {added} topic(s) to '{persona['label']}', "
+              f"all genuinely invented by Gemini.")
+
+    # Returning a dict (not a bare int) is what lets the workflow print a
+    # real "here is exactly what got added" summary instead of just a
+    # count — see the Add Topics workflow's step-summary step.
+    return {
+        "persona": persona_key, "label": persona["label"], "added": added,
+        "from_gemini": added_from_gemini, "from_groq": added_from_groq,
+        "from_seed": seed_count, "topics": added_names,
+    }
 
 
 def resolve_active_personas(db) -> list:
