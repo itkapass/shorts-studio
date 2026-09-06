@@ -283,15 +283,17 @@ export default function ManualControls({ compact = false }) {
               {action.customizable && (
                 <button
                   onClick={() => setExpanded(isExpanded ? null : action.id)}
+                  className="btn btn-sm btn-ghost"
                   style={{
-                    all: 'unset', display: 'flex', alignItems: 'center', gap: 4,
-                    fontSize: '0.7rem', color: 'var(--text-muted)', cursor: 'pointer',
-                    marginTop: 6, padding: '2px 4px',
+                    display: 'flex', alignItems: 'center', gap: 5, width: '100%',
+                    justifyContent: 'center', marginTop: 6, fontSize: '0.72rem',
+                    border: '1px solid var(--border)',
+                    background: isExpanded ? 'var(--bg-elevated)' : 'transparent',
                   }}
                 >
-                  <Settings2 size={11} />
-                  Customize (channel, count{action.id === 'generate' ? ', specific topic' : ''})
-                  {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                  <Settings2 size={12} />
+                  {isExpanded ? 'Hide options' : `Choose channel, count${action.id === 'generate' ? ' or exact topic' : ''}`}
+                  {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
                 </button>
               )}
 
