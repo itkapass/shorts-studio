@@ -395,6 +395,32 @@ def _channels_dropdown_complete():
     return f"all {len(personas.PERSONAS)} personas in one shared file, imported by both consumers"
 
 
+# ── 19. Scheduled runs never redundantly re-run topic top-up ───────────────
+def _scheduled_runs_skip_topics():
+    src = open(".github/workflows/generate.yml", encoding="utf-8").read()
+    if "github.event_name" not in src or "'schedule'" not in src.replace('"', "'"):
+        raise RuntimeError(
+            "generate.yml no longer distinguishes schedule vs manual triggers — "
+            "scheduled runs may again silently re-run topic top-up on every one "
+            "of the 6 daily runs instead of relying on the dedicated Add Topics "
+            "workflow, quietly multiplying Gemini spend past the documented budget."
+        )
+    return "scheduled generate runs always pass --skip-topics; manual runs keep the checkbox"
+
+
+# ── 20. A backup failure is never reported as 'not configured' ─────────────
+def _backup_failure_not_mislabeled():
+    src = open("engine/script_generator.py", encoding="utf-8").read()
+    if "IS configured and was tried" not in src:
+        raise RuntimeError(
+            "script_generator.py no longer distinguishes 'no backup configured' "
+            "from 'a backup was configured but also failed' — every quota "
+            "failure would again claim no backup exists even when one is "
+            "present and simply had its own separate problem."
+        )
+    return "the two failure modes produce two different, accurate messages"
+
+
 if __name__ == "__main__":
     check("Python syntax", _syntax)
     check("Undefined names", _undefined)
@@ -414,6 +440,8 @@ if __name__ == "__main__":
     check("AI-generated visual backup", _ai_visual_backup)
     check("Backup reachable despite local budget", _backup_reachable_despite_local_budget)
     check("Channels dropdown has every persona", _channels_dropdown_complete)
+    check("Scheduled runs skip redundant topic top-up", _scheduled_runs_skip_topics)
+    check("Backup failure not mislabeled", _backup_failure_not_mislabeled)
 
     print()
     for name, detail in PASSED:

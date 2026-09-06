@@ -159,7 +159,21 @@ jobs:
           ASSETS_DIR:           assets
         run: |
           ARGS=""
-          if [ "${{ inputs.skip_topics }}" = "true" ]; then
+          # SCHEDULED runs always skip topic top-up, full stop — no exception.
+          # inputs.skip_topics is only ever populated on a manual
+          # workflow_dispatch run; on a cron trigger it evaluates to empty
+          # regardless of the input's declared default, so checking it here
+          # was silently a no-op for every one of the 6 scheduled runs a day.
+          # That meant EVERY scheduled run also re-checked and topped up
+          # every active persona's pool — with 3 channels, up to 3 extra
+          # Gemini calls, 6 times a day, on top of the 12 already budgeted
+          # for videos. The dedicated Add Topics workflow (once a day) was
+          # supposed to be the only place this cost was paid; this silently
+          # multiplied it, which is a real, measurable reason the daily
+          # allowance was running out every single day.
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            ARGS="$ARGS --skip-topics"
+          elif [ "${{ inputs.skip_topics }}" = "true" ]; then
             ARGS="$ARGS --skip-topics"
           fi
           if [ -n "${{ inputs.manual_count }}" ]; then

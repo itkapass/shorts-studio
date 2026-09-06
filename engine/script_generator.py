@@ -206,6 +206,7 @@ def _call_model_with_clear_errors(client, model_name, system_prompt, user_prompt
 
                 # Genuine daily exhaustion. Try the free backup before
                 # giving up — this is the one situation it exists for.
+                backup_failure_detail = None
                 if backup_provider.available():
                     print(f"[script_generator] \U0001f501 Gemini's daily quota is gone. "
                           f"Falling back to the backup provider (Groq) for this call...")
@@ -216,8 +217,28 @@ def _call_model_with_clear_errors(client, model_name, system_prompt, user_prompt
                         return _ModelResponse(text, backup_provider.PROVIDER_NAME)
                     except Exception as backup_err:
                         print(f"[script_generator] \u2717 Backup provider also failed: {backup_err}")
-                        # Fall through to the normal, clear Gemini-quota error below —
-                        # do not hide the original problem behind the backup's failure.
+                        # Recorded so the FINAL error (below) can say what
+                        # actually happened, not just "not configured" —
+                        # those are two completely different problems with
+                        # two completely different fixes, and collapsing
+                        # them into one message meant every failure looked
+                        # like a missing key even when a real key was
+                        # present and had its own separate problem.
+                        backup_failure_detail = str(backup_err)
+
+                if backup_failure_detail:
+                    backup_note = (
+                        f"A backup provider (Groq) IS configured and was tried, but it also "
+                        f"failed: {backup_failure_detail}\n\n"
+                        f"This is a different problem from a missing key — check the Groq key "
+                        f"itself (console.groq.com/keys) and GROQ_MODEL if you've overridden it."
+                    )
+                else:
+                    backup_note = (
+                        f"No backup provider is configured, so there was nothing to fall back to. "
+                        f"See docs/13_BACKUP_AI_PROVIDER.md to add one (free, ~2 minutes) so a "
+                        f"day like this does not block testing again."
+                    )
 
                 raise RuntimeError(
                     f"Gemini daily quota exhausted (429 RESOURCE_EXHAUSTED).\n\n"
@@ -225,9 +246,7 @@ def _call_model_with_clear_errors(client, model_name, system_prompt, user_prompt
                     f"allowance is gone. It resets at midnight Pacific.\n\n"
                     f"To fit more videos into the daily allowance, lower 'Daily video "
                     f"generation batch' in Settings. Each video costs about 2 requests.\n\n"
-                    f"No backup provider is configured, so there was nothing to fall back to. "
-                    f"See docs/13_BACKUP_AI_PROVIDER.md to add one (free, ~2 minutes) so a "
-                    f"day like this does not block testing again.\n\n"
+                    f"{backup_note}\n\n"
                     f"Original error: {e}"
                 ) from e
 
