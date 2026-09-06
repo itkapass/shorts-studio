@@ -982,6 +982,7 @@ def _expire_stale_render_jobs(db, max_age_hours: int = 3):
         for row in stale:
             db.table("videos").update({
                 "status": "failed",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
                 "error_log": (
                     f"Stuck in 'Awaiting Render' for over {max_age_hours} hours. "
                     "The render job never ran or did not finish — check the Actions tab. "
@@ -995,6 +996,7 @@ def _expire_stale_render_jobs(db, max_age_hours: int = 3):
 
 def _log_failure(db: Client, job_id: str, topic: dict, tone: dict, error: str):
     try:
+        now = datetime.now(timezone.utc).isoformat()
         db.table("videos").insert({
             "job_id": job_id,
             "title": f"[FAILED] {topic['name']} + {tone['name']}",
@@ -1002,7 +1004,8 @@ def _log_failure(db: Client, job_id: str, topic: dict, tone: dict, error: str):
             "error_log": error,
             "topic_id": topic.get("id"),
             "tone_id": tone.get("id"),
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": now,
+            "updated_at": now,
         }).execute()
     except Exception:
         pass  # Don't let logging failures crash the whole run

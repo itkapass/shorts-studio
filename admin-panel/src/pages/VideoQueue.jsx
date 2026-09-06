@@ -89,6 +89,46 @@ function isRecent(iso) {
   return then && (Date.now() - then) < 2 * 60 * 60 * 1000
 }
 
+// Directly answers the two questions that keep coming up: "why didn't
+// adding a topic put anything here" and "why didn't my scheduled video
+// show up in Awaiting Render." Both are the same underlying fact stated
+// two different ways — Awaiting Render is fed by exactly one thing, and
+// most of what this app does never touches it.
+const TAB_EXPLANATIONS = {
+  queued_for_render:
+    'Only videos from the Create Video (custom prompt) page\u2019s two-step flow ' +
+    'land here \u2014 storyboard written, not yet rendered. Adding topics never ' +
+    'puts anything here (it only adds to Topic Studio, no video is created). ' +
+    'Scheduled and "Generate Video Now" runs write AND render in one step, so ' +
+    'a finished one from either of those appears directly in Pending Review, ' +
+    'never here.',
+  failed:
+    'Generation failures and publish failures together. Each card explains ' +
+    'why \u2014 most are either a Gemini quota limit (self-resolving) or Gemini ' +
+    'being briefly overloaded (503, also self-resolving on retry).',
+}
+
+// Tabs where the useful number is "how many happened since I last looked"
+// (a notification), not "how many exist right now" (a backlog). Pending
+// Review, Approved, Rendering and Awaiting Render are backlogs — the total
+// IS the actionable number, you need to work through all of them. Failed
+// and Published are more like a log: what matters is whether something
+// NEW happened, and a raw lifetime total buries that under however many
+// failures/publishes have ever occurred in the app's whole history.
+const UNREAD_TRACKED_TABS = ['failed', 'published']
+
+function lastSeenKey(tabId) {
+  return `shorts_studio_last_seen_${tabId}`
+}
+
+function getLastSeen(tabId) {
+  return localStorage.getItem(lastSeenKey(tabId)) || '1970-01-01T00:00:00.000Z'
+}
+
+function markSeen(tabId) {
+  localStorage.setItem(lastSeenKey(tabId), new Date().toISOString())
+}
+
 export default function VideoQueue() {
   const [videos, setVideos] = useState([])
   const [filter, setFilter] = useState('pending') // 'pending' | 'approved' | 'published' | 'all'
@@ -115,6 +155,7 @@ export default function VideoQueue() {
   // many are pending / rendering / failed without clicking through every
   // tab."
   const [counts, setCounts] = useState({})
+  const [unread, setUnread] = useState({})
 
   async function loadCounts() {
     const statuses = {
@@ -142,6 +183,24 @@ export default function VideoQueue() {
       .from('videos')
       .select('id', { count: 'exact', head: true })
     next.all = totalCount || 0
+
+    // Unread counts for Failed/Published: same status filter, but only
+    // rows updated after the last time THIS tab was actually opened. This
+    // is what makes the badge answer "did something new happen" instead of
+    // "how many of these exist in total" — a total that never goes away is
+    // not a notification, it is just a permanent number nobody can act on.
+    const unreadEntries = await Promise.all(
+      UNREAD_TRACKED_TABS.map(async (tabId) => {
+        const { count } = await supabase
+          .from('videos')
+          .select('id', { count: 'exact', head: true })
+          .in('status', statuses[tabId])
+          .gt('updated_at', getLastSeen(tabId))
+        return [tabId, count || 0]
+      })
+    )
+    setUnread(Object.fromEntries(unreadEntries))
+
     setCounts(next)
   }
 
@@ -294,13 +353,24 @@ export default function VideoQueue() {
           { id: 'failed', label: 'Failed', danger: true },
           { id: 'all', label: 'All History' }
         ].map(tab => {
-          const n = counts[tab.id]
+          const isUnreadTracked = UNREAD_TRACKED_TABS.includes(tab.id)
+          // Notification-style tabs show "new since last visit"; backlog
+          // tabs show the plain total — see UNREAD_TRACKED_TABS above for
+          // why these need different numbers, not just different colors.
+          const n = isUnreadTracked ? unread[tab.id] : counts[tab.id]
           return (
             <button
               key={tab.id}
-              onClick={() => setFilter(tab.id)}
+              onClick={() => {
+                setFilter(tab.id)
+                if (isUnreadTracked) {
+                  markSeen(tab.id)
+                  setUnread(prev => ({ ...prev, [tab.id]: 0 }))
+                }
+              }}
               className={`btn btn-sm ${filter === tab.id ? 'btn-primary' : 'btn-ghost'}`}
               style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+              title={isUnreadTracked ? `${counts[tab.id] ?? 0} total \u00b7 ${n ?? 0} new since you last opened this tab` : undefined}
             >
               {tab.label}
               {/* Only shown once counts have loaded and there's something to
@@ -320,18 +390,6 @@ export default function VideoQueue() {
           )
         })}
       </div>
-
-      {filter === 'failed' && (
-        <div style={{
-          margin: '0 0 16px', padding: '10px 14px', borderRadius: 6, fontSize: '0.8rem',
-          background: 'rgba(239, 68, 68, 0.1)', color: '#f87171',
-          border: '1px solid rgba(239, 68, 68, 0.25)',
-        }}>
-          Generation failures and publish failures together. Each card explains why —
-          most are either a Gemini quota limit (self-resolving) or Gemini being briefly
-          overloaded (503, also self-resolving on retry).
-        </div>
-      )}
 
       {publishMsg && (
         <div style={{
@@ -380,6 +438,21 @@ export default function VideoQueue() {
             </button>
           )}
           <span className="muted small">{visibleVideos.length} of {videos.length} shown</span>
+        </div>
+      )}
+
+      {/* What this tab actually means. Always shown, not just on empty —
+          "where did my new topic/video go" has come up repeatedly, and a
+          one-time chat answer doesn't help the next time the question
+          comes up. This is the same answer, permanently in the one place
+          it's needed. */}
+      {TAB_EXPLANATIONS[filter] && (
+        <div style={{
+          margin: '0 0 16px', padding: '10px 14px', borderRadius: 6, fontSize: '0.78rem',
+          background: 'var(--bg-elevated)', color: 'var(--text-muted)',
+          border: '1px solid var(--border)',
+        }}>
+          {TAB_EXPLANATIONS[filter]}
         </div>
       )}
 

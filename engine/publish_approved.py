@@ -206,6 +206,9 @@ def run_publish_pipeline():
                 "channel_id":   (channel or {}).get("id"),
                 "published_at": datetime.now(timezone.utc).isoformat(),
                 "publish_now":  False,   # clear the flag so it can't re-fire
+                # Same reasoning as _update_status above: no DB trigger
+                # keeps this current on UPDATE, only an insert-time default.
+                "updated_at":   datetime.now(timezone.utc).isoformat(),
             }).eq("id", row["id"]).execute()
 
             # Commit the concept to the permanent ledger only now, on the way
@@ -272,7 +275,13 @@ def _explain_error(e: Exception) -> str:
 
 
 def _update_status(db, row_id: int, status: str, error: str = None):
-    update = {"status": status}
+    # updated_at has only an INSERT-time default in the schema (DEFAULT
+    # NOW()), not an update trigger — an UPDATE like this one would silently
+    # leave it at whenever the row was first created, not when it actually
+    # failed to publish. That is the timestamp the dashboard's unread
+    # "new since I last looked" badge on the Failed tab depends on being
+    # accurate, so it is set explicitly here rather than assumed.
+    update = {"status": status, "updated_at": datetime.now(timezone.utc).isoformat()}
     if error:
         update["error_log"] = error[:1000]
     db.table("videos").update(update).eq("id", row_id).execute()

@@ -421,6 +421,34 @@ def _backup_failure_not_mislabeled():
     return "the two failure modes produce two different, accurate messages"
 
 
+# ── 21. Unread-notification timestamps are actually maintained ─────────────
+def _unread_badges_have_real_timestamps():
+    """The Failed/Published tab badges show 'new since last visit', computed
+    by comparing updated_at against a localStorage timestamp. That is only
+    correct if updated_at is actually refreshed at the moment a video
+    fails or publishes — the schema only defaults it on INSERT, there is no
+    UPDATE trigger, so every write path that flips status to failed/
+    published/publish_failed must set it explicitly or the badge silently
+    reads a stale row-creation time instead of the real event time."""
+    pa = open("engine/publish_approved.py", encoding="utf-8").read()
+    if pa.count('"updated_at"') < 2:
+        raise RuntimeError(
+            "publish_approved.py doesn't set updated_at on both the "
+            "successful-publish update and the shared _update_status() "
+            "helper (used for publish_failed) — the Published/Failed "
+            "unread badges would read stale timestamps."
+        )
+    orch = open("engine/orchestrator.py", encoding="utf-8").read()
+    if '"updated_at": datetime.now' not in orch:
+        raise RuntimeError(
+            "orchestrator.py's failure write paths don't set updated_at explicitly."
+        )
+    jsx = open("admin-panel/src/pages/VideoQueue.jsx", encoding="utf-8").read()
+    if "UNREAD_TRACKED_TABS" not in jsx or "getLastSeen" not in jsx:
+        raise RuntimeError("VideoQueue.jsx is missing the unread-tracking mechanism")
+    return "Failed/Published badges show real unread counts, not lifetime totals"
+
+
 if __name__ == "__main__":
     check("Python syntax", _syntax)
     check("Undefined names", _undefined)
@@ -442,6 +470,7 @@ if __name__ == "__main__":
     check("Channels dropdown has every persona", _channels_dropdown_complete)
     check("Scheduled runs skip redundant topic top-up", _scheduled_runs_skip_topics)
     check("Backup failure not mislabeled", _backup_failure_not_mislabeled)
+    check("Unread badges have real timestamps", _unread_badges_have_real_timestamps)
 
     print()
     for name, detail in PASSED:
