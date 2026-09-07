@@ -109,9 +109,11 @@ PERSONAS = {
             "sarcastic and absurd registers. Fresh, specific jokes — never the joke format "
             "everyone has already seen a hundred versions of. Current-affairs comedy reacting "
             "to what's actually in the news this week, plus evergreen bits about superstition, "
-            "health anxiety, overthinking, finding something absurd in a bad situation, and a "
-            "pet's-eye-view strand — a cat or bird character's internal monologue narrating "
-            "human behaviour it finds baffling."
+            "health anxiety, overthinking, finding something absurd in a bad situation, an "
+            "office-life strand (meetings, group chats, the specific unwritten rules of a "
+            "workplace), a school-life strand (student and teacher dynamics, the specific "
+            "diplomacy of a classroom), and a pet's-eye-view strand — a cat or bird character's "
+            "internal monologue narrating human behaviour it finds baffling."
         ),
         "seed_topics": [
             "The group chat that never dies but nobody wants to reply to first",
@@ -128,6 +130,24 @@ PERSONAS = {
             "Explaining a common superstition completely straight-faced as though it were physics",
             "The elaborate mental gymnastics required to justify not going to the gym today",
             "What it's actually like inside the head of someone who is 'fine' and definitely not overthinking this",
+            # Office-life strand — added because the pet's-eye-view and superstition
+            # strands were crowding out ordinary workplace material. Written as
+            # specific two-character exchanges, not generic "office comedy," to
+            # match this persona's own rule against the obvious version of a joke.
+            "The precise tone shift in an email when 'per my last message' gets used",
+            "Negotiating with yourself over whether a problem is worth interrupting someone's lunch for",
+            "The unspoken ranking system for who has to speak first on a call nobody wanted",
+            "What 'let's take this offline' actually means depending on who says it",
+            "The specific panic of realising you have been unmuted for longer than you thought",
+            "Two coworkers agreeing a meeting could have been an email while scheduling a meeting about it",
+            # School-life strand — student and teacher dynamics specifically,
+            # not just "school is hard." Same rule: a specific moment, not a
+            # general topic label.
+            "The exact face a student makes hoping the teacher skips them for the next question",
+            "A teacher's internal monologue watching a student 'accidentally' not submit an assignment",
+            "The elaborate excuse-construction that happens in the sixty seconds before a deadline",
+            "Two students silently negotiating who has to ask the teacher to repeat the instructions",
+            "The specific dread of a teacher saying 'let's go around the room' during an unprepared class",
             "A cat's internal monologue watching its owner apologise to furniture they walked into",
             "A cat's take on why humans announce they are leaving the house three separate times before actually leaving",
             "A bird's internal monologue watching its owner take a video call sitting inches from actual daylight outside",

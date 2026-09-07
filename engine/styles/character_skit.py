@@ -231,10 +231,21 @@ def _render_banner(text, w, h, font_path):
 
     Drawn as a dark rounded plate with light text so it stays legible over any
     stage colour without needing per-stage tuning.
+
+    Returns (layer, bottom_y_fraction) — the second value is how far down the
+    frame the box's bottom edge actually landed, as a fraction of height. THE
+    BUG THIS FIXES: dialogue text used to start at a fixed 0.105 regardless of
+    how tall this box actually rendered. A short one-line title fit fine; a
+    longer title wrapping to two lines (exactly what "The Dental Appointment
+    Negotiation" does) made a taller box that the fixed offset never accounted
+    for, so the dialogue text started drawing UNDER the title card instead of
+    below it — the visible overlap in the rendered videos. Returning the real
+    measured height lets the caller reserve exactly the space that was
+    actually used, not a guess.
     """
     layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     if not text or not text.strip():
-        return layer
+        return layer, 0.055  # matches the no-banner dialogue_top default
 
     d = ImageDraw.Draw(layer)
     size = int(h * 0.026)
@@ -261,7 +272,9 @@ def _render_banner(text, w, h, font_path):
         lw = d.textlength(line, font=font)
         d.text(((w - lw) / 2, y0 + pad_y + i * line_h), line, font=font,
                fill=(255, 255, 255, 255))
-    return layer
+
+    bottom_fraction = (y0 + box_h) / h + 0.018  # small breathing-room margin
+    return layer, bottom_fraction
 
 
 def _render_label(text, w, h, font_path, top_ratio=0.105):
@@ -387,15 +400,22 @@ def build_whole_video_clip(scenes: list, total_duration: float, video_w: int, vi
 
     # Pinned banner (one for the whole video) and per-scene era labels.
     banner_text = next((s.get("_banner") for s in scenes if s.get("_banner")), "")
-    banner_layer = _render_banner(banner_text, video_w, video_h, font_path)
+    banner_layer, banner_bottom = _render_banner(banner_text, video_w, video_h, font_path)
 
     # Stack these vertically instead of placing each at a fixed position.
     # Fixed positions collided the moment a video used both a banner and an
     # era label with two lines of dialogue — the label landed on top of the
     # text and both became unreadable.
+    #
+    # dialogue_top now starts from banner_bottom — the banner's REAL rendered
+    # height — rather than a flat 0.105 constant. The constant assumed a
+    # short, single-line title; a longer one that wraps to two lines (a
+    # perfectly normal video title) produced a taller box the old constant
+    # never accounted for, so dialogue text started drawing underneath the
+    # title card instead of below it.
+    label_top = banner_bottom
     has_label = any(s.get("label") for s in scenes)
-    label_top = 0.105 if banner_text else 0.055
-    dialogue_top = label_top + (0.048 if has_label else 0.0) + (0.005 if banner_text else 0.0)
+    dialogue_top = label_top + (0.048 if has_label else 0.0)
 
     label_layers = [
         _render_label(s.get("label"), video_w, video_h, font_path, label_top)

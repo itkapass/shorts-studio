@@ -334,9 +334,35 @@ def generate_multi_voice(scenes: list, output_dir: str, job_id: str, default_voi
     different voices. Each scene is synthesised separately, then the pieces are
     joined and every scene's word timings are shifted by the running offset so
     the global timeline stays correct.
+
+    THE BUG THIS FIXES: every character's voice used to come ONLY from
+    CHARACTER_VOICES (a fixed name -> voice mapping), and that mapping always
+    won over `default_voice` whenever a scene had a real character name — which
+    is every scene, since script_generator always fills one in. Settings'
+    "Narration Voice" picker is exactly `default_voice` here, so choosing
+    "male" there did nothing for any character skit: whichever named
+    character had the most lines (very often "cat", CHARACTER_VOICES'
+    only female entry) simply kept speaking in ITS assigned voice regardless
+    of what was chosen in Settings. That is precisely "I set the voice to
+    male and a female voice stayed attached the whole time."
+
+    Now: the PRIMARY character (whoever has the most scenes — the actual
+    voice a viewer mostly hears) uses the explicit Settings choice when one
+    was made. Anyone else in the scene keeps their fixed CHARACTER_VOICES
+    voice, so a genuine two-character exchange still sounds like two
+    different people — only the dominant, most-heard voice is the one
+    Settings actually controls, which is the one that was silently
+    unreachable before.
     """
     _require_ffmpeg()
     os.makedirs(output_dir, exist_ok=True)
+
+    # Who's actually the primary speaker in THIS video — the one whose
+    # voice a viewer will mostly associate with it.
+    from collections import Counter
+    speaker_counts = Counter(s.get("character") for s in scenes if (s.get("voice_text") or "").strip())
+    primary_character = speaker_counts.most_common(1)[0][0] if speaker_counts else None
+    primary_voice_override = VOICE_PROFILES.get(default_voice)
 
     parts, all_words, offset = [], [], 0.0
     for i, scene in enumerate(scenes):
@@ -344,9 +370,12 @@ def generate_multi_voice(scenes: list, output_dir: str, job_id: str, default_voi
         if not text:
             continue
         character = scene.get("character")
-        voice_id = CHARACTER_VOICES.get(character) or VOICE_PROFILES.get(
-            default_voice, VOICE_PROFILES["default"]
-        )
+        if primary_voice_override and character == primary_character:
+            voice_id = primary_voice_override
+        else:
+            voice_id = CHARACTER_VOICES.get(character) or VOICE_PROFILES.get(
+                default_voice, VOICE_PROFILES["default"]
+            )
         part_path = os.path.join(output_dir, f"{job_id}_part{i}.mp3")
 
         result = generate_voiceover(

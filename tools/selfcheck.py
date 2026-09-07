@@ -449,6 +449,33 @@ def _unread_badges_have_real_timestamps():
     return "Failed/Published badges show real unread counts, not lifetime totals"
 
 
+# ── 22. Settings' voice choice actually reaches character skits ────────────
+def _character_skit_voice_override():
+    src = open("engine/voice_engine.py", encoding="utf-8").read()
+    if "primary_voice_override" not in src or "primary_character" not in src:
+        raise RuntimeError(
+            "generate_multi_voice no longer lets Settings' voice choice reach "
+            "the primary speaker — CHARACTER_VOICES would silently win every "
+            "time again, making the Settings voice picker a no-op for any "
+            "character-skit video (comedy)."
+        )
+    return "Settings' voice choice now governs the primary (most-used) speaking character"
+
+
+# ── 23. The title banner no longer collides with dialogue text ─────────────
+def _banner_collision_fixed():
+    src = open("engine/styles/character_skit.py", encoding="utf-8").read()
+    if "return layer, bottom_fraction" not in src and "return layer, 0.055" not in src:
+        raise RuntimeError("_render_banner no longer returns its real measured height")
+    if "banner_bottom" not in src:
+        raise RuntimeError(
+            "dialogue_top is no longer derived from the banner's actual height — "
+            "a title that wraps to two lines will again visually collide with "
+            "the caption text drawn under it."
+        )
+    return "dialogue text position is derived from the banner's real height, not a fixed guess"
+
+
 if __name__ == "__main__":
     check("Python syntax", _syntax)
     check("Undefined names", _undefined)
@@ -471,6 +498,8 @@ if __name__ == "__main__":
     check("Scheduled runs skip redundant topic top-up", _scheduled_runs_skip_topics)
     check("Backup failure not mislabeled", _backup_failure_not_mislabeled)
     check("Unread badges have real timestamps", _unread_badges_have_real_timestamps)
+    check("Character skit voice override", _character_skit_voice_override)
+    check("Banner/dialogue collision fixed", _banner_collision_fixed)
 
     print()
     for name, detail in PASSED:
