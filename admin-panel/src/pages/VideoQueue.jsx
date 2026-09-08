@@ -131,6 +131,16 @@ function markSeen(tabId) {
 
 export default function VideoQueue() {
   const [videos, setVideos] = useState([])
+  // id -> name, so each video card can show which channel it's actually
+  // headed for. Direct answer to "is this really going to Comedy or
+  // mind_scraping" without opening the database.
+  const [channelNames, setChannelNames] = useState({})
+
+  useEffect(() => {
+    supabase.from('channels').select('id, name').then(({ data }) => {
+      setChannelNames(Object.fromEntries((data || []).map(c => [c.id, c.name])))
+    })
+  }, [])
   const [filter, setFilter] = useState('pending') // 'pending' | 'approved' | 'published' | 'all'
   const [publishBusy, setPublishBusy] = useState(null)
   const [publishMsg, setPublishMsg]   = useState('')
@@ -565,6 +575,25 @@ export default function VideoQueue() {
                             🎨 {video.render_style.replace(/_/g, ' ')}
                           </span>
                         )}
+                        {/* Which channel this video is actually headed for —
+                            resolved the same way at generation time as
+                            publish time, so this is trustworthy from the
+                            moment the video appears, not just after it goes
+                            out. A grey "not yet routed" is a real, checkable
+                            state: it means no enabled channel currently
+                            accepts this video's category/persona, and it
+                            will fall to manual export at publish time. */}
+                        {video.channel_id ? (
+                          <span className="badge" title="Resolved the same way publishing resolves it — this is where it's actually headed."
+                                style={{ background: 'rgba(45, 206, 137, 0.12)', color: 'var(--accent-green)', border: '1px solid rgba(45, 206, 137, 0.3)' }}>
+                            📡 {channelNames[video.channel_id] || 'channel'}
+                          </span>
+                        ) : (video.status !== 'published' && (
+                          <span className="badge" title="No enabled channel currently accepts this video's category. It will fall to manual export unless a channel is set up for it."
+                                style={{ background: 'var(--bg-elevated)', color: 'var(--text-muted)' }}>
+                            📡 not yet routed
+                          </span>
+                        ))}
                         {/* Which AI actually wrote this script. Honest by
                             design — the whole point of the Groq backup is
                             that it never pretends to be the primary model.

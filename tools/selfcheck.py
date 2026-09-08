@@ -495,6 +495,26 @@ def _groq_model_not_retired():
     return "default model is current; a second candidate is tried automatically if it's ever retired too"
 
 
+# ── 25. channel_id is resolved at generation time, not only at publish ─────
+def _channel_id_resolved_at_generation():
+    src = open("engine/orchestrator.py", encoding="utf-8").read()
+    if "resolved_channel_id" not in src or "channels_mod.route(" not in src:
+        raise RuntimeError(
+            "orchestrator.py no longer resolves channel_id when a video is "
+            "created — _save_and_finalize's channel_id parameter would again "
+            "silently default to None on every video until it publishes, "
+            "which is harmless for publishing itself (persona_key drives "
+            "that) but means the dashboard has no way to show which channel "
+            "a not-yet-published video is actually headed for."
+        )
+    if "channel_id=resolved_channel_id" not in src:
+        raise RuntimeError("resolved_channel_id is computed but never passed to _save_and_finalize")
+    jsx = open("admin-panel/src/pages/VideoQueue.jsx", encoding="utf-8").read()
+    if "channelNames" not in jsx:
+        raise RuntimeError("VideoQueue.jsx doesn't display the resolved channel on video cards")
+    return "channel_id is resolved with the same routing logic publish time uses, and shown on each card"
+
+
 if __name__ == "__main__":
     check("Python syntax", _syntax)
     check("Undefined names", _undefined)
@@ -520,6 +540,7 @@ if __name__ == "__main__":
     check("Character skit voice override", _character_skit_voice_override)
     check("Banner/dialogue collision fixed", _banner_collision_fixed)
     check("Groq model not retired", _groq_model_not_retired)
+    check("channel_id resolved at generation time", _channel_id_resolved_at_generation)
 
     print()
     for name, detail in PASSED:

@@ -457,7 +457,6 @@ def run_generation_pipeline(manual_count: int = None, skip_topics: bool = False,
         all_arch = arch.archetype_names()
         persona_key = topic.get("persona_key")
         persona = personas_mod.get_persona(persona_key) if persona_key else None
-
         # A persona-tagged topic rotates through ONLY that persona's preferred
         # formats — a comedy-persona topic must never come out as a myth-busting
         # explainer. Topics with no persona keep the original full rotation.
@@ -486,9 +485,25 @@ def run_generation_pipeline(manual_count: int = None, skip_topics: bool = False,
         if render_style not in available_styles():
             render_style = default_style
 
+        # BUGFIX: _save_and_finalize's channel_id parameter defaults to None
+        # and NOTHING here ever passed it a real value — every video's
+        # channel_id sat NULL from creation until the moment it published,
+        # when publish_approved.py resolved it fresh via this exact same
+        # routing call. That didn't break publishing (persona_key, which was
+        # always set correctly, is what publishing actually keys off), but it
+        # meant the dashboard had no way to show which channel a video was
+        # headed for while it was still Pending/Approved/Rendering — you
+        # could only find out after the fact. Resolving it here, with the
+        # same function publish time uses, means the answer is right there
+        # the moment the video is created, not just after it goes out.
+        resolved_channel = channels_mod.route(archetype, channels=all_channels,
+                                              persona_key=persona_key) if all_channels else None
+        resolved_channel_id = (resolved_channel or {}).get("id")
+
         print(f"\n[orchestrator] \u2500\u2500 Video {i+1}/{videos_this_run} \u2500\u2500 Job: {job_id}")
         print(f"[orchestrator]    Topic: {topic['name']} | Tone: {tone['name']}")
         print(f"[orchestrator]    Format: {archetype} | Structure: {structure} | Style: {render_style}")
+        print(f"[orchestrator]    Channel: {(resolved_channel or {}).get('name', 'no channel matched yet')}")
 
         attempted += 1
         try:
@@ -571,7 +586,7 @@ def run_generation_pipeline(manual_count: int = None, skip_topics: bool = False,
             _save_and_finalize(db, result, job_id, topic.get("id"), tone.get("id"), render_style,
                                 auto_approve=auto_approve, archetype=archetype,
                                 structure=structure, creative_brief=creative_brief,
-                                persona_key=persona_key,
+                                persona_key=persona_key, channel_id=resolved_channel_id,
                                 topic_label=topic.get("category") or None)
 
             # The concept is added to the in-memory ledger immediately so the
