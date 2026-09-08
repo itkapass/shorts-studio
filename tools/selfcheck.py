@@ -476,6 +476,25 @@ def _banner_collision_fixed():
     return "dialogue text position is derived from the banner's real height, not a fixed guess"
 
 
+# ── 24. Groq's default model isn't the one that already got retired ────────
+def _groq_model_not_retired():
+    src = open("engine/backup_provider.py", encoding="utf-8").read()
+    if 'DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"' in src:
+        raise RuntimeError(
+            "DEFAULT_GROQ_MODEL is still the model Groq deprecated on "
+            "2026-06-17 and fully shut down 2026-08-16 — every backup "
+            "attempt would fail against a model that no longer exists."
+        )
+    if "FALLBACK_GROQ_MODEL" not in src or "_ModelNotFound" not in src:
+        raise RuntimeError(
+            "backup_provider.py no longer retries a second model name on "
+            "'model not found' — a single retired model name can once "
+            "again take the entire Groq backup offline until a human "
+            "notices and ships a fix, exactly what just happened."
+        )
+    return "default model is current; a second candidate is tried automatically if it's ever retired too"
+
+
 if __name__ == "__main__":
     check("Python syntax", _syntax)
     check("Undefined names", _undefined)
@@ -500,6 +519,7 @@ if __name__ == "__main__":
     check("Unread badges have real timestamps", _unread_badges_have_real_timestamps)
     check("Character skit voice override", _character_skit_voice_override)
     check("Banner/dialogue collision fixed", _banner_collision_fixed)
+    check("Groq model not retired", _groq_model_not_retired)
 
     print()
     for name, detail in PASSED:

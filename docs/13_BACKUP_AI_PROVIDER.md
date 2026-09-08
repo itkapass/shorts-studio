@@ -76,6 +76,11 @@ paid key to either provider.
 ## Overriding the model
 
 Groq retires and adds free models on its own schedule, the same way Gemini
-does. If `llama-3.3-70b-versatile` (this project's default) ever stops
-resolving, set a GitHub secret named `GROQ_MODEL` to a current one — check
-**console.groq.com/docs/models** for what's free right now.
+does. This has already happened once for real: the original default,
+`llama-3.3-70b-versatile`, was deprecated by Groq on 2026-06-17 and fully
+shut down 2026-08-16 — every backup attempt failed silently against a model
+that no longer existed until this was caught and fixed. The default is now
+`openai/gpt-oss-120b`, Groq's own recommended replacement. If this one is
+ever retired too, set a GitHub secret named `GROQ_MODEL` to a current one —
+check **console.groq.com/docs/models** for what's free right now, rather
+than waiting for another update to this project.

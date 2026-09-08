@@ -55,7 +55,16 @@ GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 # auto-discovers the current Gemini model rather than hardcoding one) —
 # override with the GROQ_MODEL env var if this name stops resolving. Current
 # list: https://console.groq.com/docs/models
-DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+# llama-3.3-70b-versatile (this project's original default) was deprecated
+# by Groq on 2026-06-17 and fully shut down 2026-08-16 — confirmed directly
+# against console.groq.com/docs/deprecations, and confirmed as the actual
+# live cause of every recent generation failure via the app's own error
+# message ("Groq model 'llama-3.3-70b-versatile' was not found"). Updated to
+# Groq's own official recommended replacement for general-purpose/reasoning
+# workloads. If THIS one is ever retired too, override with the GROQ_MODEL
+# env var rather than waiting for another zip — check
+# console.groq.com/docs/models for whatever is current.
+DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
 
 TIMEOUT_SECONDS = 60
 PROVIDER_NAME = "groq"
@@ -66,6 +75,16 @@ def available() -> bool:
     trying the fallback, so a missing key produces a clear 'no backup is
     set up' message instead of a confusing request failure."""
     return bool(os.environ.get("GROQ_API_KEY"))
+
+
+# If the configured model (DEFAULT_GROQ_MODEL, or GROQ_MODEL if set) turns
+# out to be retired, one automatic retry against this candidate happens
+# before giving up entirely. This is what the original single-hardcoded-name
+# design was missing: llama-3.3-70b-versatile's retirement (see
+# DEFAULT_GROQ_MODEL's comment) took the ENTIRE backup offline until a human
+# noticed and shipped a fix. A second, independent name means one model's
+# retirement no longer disables the whole safety net on its own.
+FALLBACK_GROQ_MODEL = "openai/gpt-oss-20b"
 
 
 def call(system_prompt: str, user_prompt: str, temperature: float = 0.9) -> str:
@@ -90,8 +109,28 @@ def call(system_prompt: str, user_prompt: str, temperature: float = 0.9) -> str:
             "and add it as a GitHub secret named GROQ_API_KEY. See docs/13."
         )
 
-    model = os.environ.get("GROQ_MODEL", DEFAULT_GROQ_MODEL)
+    primary_model = os.environ.get("GROQ_MODEL", DEFAULT_GROQ_MODEL)
+    try:
+        return _call_model(primary_model, system_prompt, user_prompt, temperature, api_key)
+    except _ModelNotFound:
+        if primary_model == FALLBACK_GROQ_MODEL:
+            raise  # already were on the fallback, nothing left to try
+        print(f"[backup_provider] \u26a0 Groq model '{primary_model}' was not found "
+              f"(likely retired). Retrying once against '{FALLBACK_GROQ_MODEL}' "
+              f"before giving up.")
+        return _call_model(FALLBACK_GROQ_MODEL, system_prompt, user_prompt, temperature, api_key)
 
+
+class _ModelNotFound(RuntimeError):
+    """Distinct from other RuntimeErrors so call() can tell 'this specific
+    model doesn't exist' apart from every other failure and retry ONLY that
+    one case — a bad key or a real rate limit should never trigger a second
+    attempt against a different model, only a genuinely missing model name
+    should."""
+
+
+def _call_model(model: str, system_prompt: str, user_prompt: str, temperature: float,
+                api_key: str) -> str:
     try:
         resp = requests.post(
             GROQ_ENDPOINT,
@@ -131,7 +170,7 @@ def call(system_prompt: str, user_prompt: str, temperature: float = 0.9) -> str:
             f"{resp.text[:200]}"
         )
     if resp.status_code == 404 or "model_not_found" in resp.text.lower():
-        raise RuntimeError(
+        raise _ModelNotFound(
             f"Groq model '{model}' was not found — it may have been retired. "
             f"Check https://console.groq.com/docs/models for a current free "
             f"model name and set GROQ_MODEL to override the default."
