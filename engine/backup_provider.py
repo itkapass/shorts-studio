@@ -13,10 +13,16 @@ already spent. Waiting for midnight Pacific is not an acceptable answer to
 "I need to test this right now."
 
 Groq (groq.com — a hosting company, unrelated to xAI's "Grok") runs open
-models like Llama 3.3 70B on its own chips. Its free tier needs no card and
-allows roughly 14,400 requests a day — see docs/13 for the exact current
-numbers, since both providers change these over time. Its API is
-OpenAI-compatible, so no new SDK: this is a single `requests.post`.
+models — this project uses OpenAI's open-weight gpt-oss-120b, with gpt-oss-20b
+as a second try if that one is ever unavailable. Its free tier needs no card.
+Real current allowance per Groq's own docs: 1,000 requests and 200,000
+tokens per day, PER MODEL — so the two models used here give roughly double
+that combined, since each has its own separate budget. (An earlier version
+of this file quoted "~14,400 requests/day," which is real but belongs to a
+different, now-deprecated model — corrected here after that mismatch showed
+up as a live failure. See docs/13 for current numbers, since Groq's own
+limits and model lineup change over time.) Its API is OpenAI-compatible, so
+no new SDK: this is a single `requests.post`.
 
 THIS IS A SAFETY NET, NOT A REPLACEMENT
 
@@ -46,6 +52,7 @@ GETTING A KEY (about 2 minutes, no credit card)
 That's the whole setup. See docs/13_BACKUP_AI_PROVIDER.md for more.
 """
 import os
+import time
 import requests
 
 GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
@@ -112,25 +119,61 @@ def call(system_prompt: str, user_prompt: str, temperature: float = 0.9) -> str:
     primary_model = os.environ.get("GROQ_MODEL", DEFAULT_GROQ_MODEL)
     try:
         return _call_model(primary_model, system_prompt, user_prompt, temperature, api_key)
-    except _ModelNotFound:
+    except _TryNextModel as e:
         if primary_model == FALLBACK_GROQ_MODEL:
-            raise  # already were on the fallback, nothing left to try
-        print(f"[backup_provider] \u26a0 Groq model '{primary_model}' was not found "
-              f"(likely retired). Retrying once against '{FALLBACK_GROQ_MODEL}' "
-              f"before giving up.")
-        return _call_model(FALLBACK_GROQ_MODEL, system_prompt, user_prompt, temperature, api_key)
+            raise RuntimeError(str(e)) from e  # already on the fallback, nothing left to try
+        print(f"[backup_provider] \u26a0 {e} Retrying once against "
+              f"'{FALLBACK_GROQ_MODEL}' before giving up.")
+        try:
+            return _call_model(FALLBACK_GROQ_MODEL, system_prompt, user_prompt, temperature, api_key)
+        except _TryNextModel as e2:
+            # Both models hit a wall. _TryNextModel is an internal signal
+            # meaning "a different model is worth trying" — with no model
+            # left to try, it must not leak out as itself; convert to a
+            # plain RuntimeError so callers only ever see this module's two
+            # public exception shapes (a plain failure, or success).
+            raise RuntimeError(str(e2)) from e2
 
 
-class _ModelNotFound(RuntimeError):
-    """Distinct from other RuntimeErrors so call() can tell 'this specific
-    model doesn't exist' apart from every other failure and retry ONLY that
-    one case — a bad key or a real rate limit should never trigger a second
-    attempt against a different model, only a genuinely missing model name
-    should."""
+class _TryNextModel(RuntimeError):
+    """Distinct from other RuntimeErrors so call() retries with a second
+    model ONLY for the two situations where that can actually help — a
+    missing/retired model name, or a rate limit on THIS specific model.
+
+    THE BUG THIS FIXES: the fallback used to trigger only on a 404 (model
+    genuinely doesn't exist). A 429 rate-limit raised immediately with no
+    retry — but Groq's limits are enforced PER MODEL, not shared across an
+    account (confirmed directly against console.groq.com/docs/rate-limits:
+    gpt-oss-120b and gpt-oss-20b each get their own separate 1,000
+    requests/day and 200,000 tokens/day). Hitting the ceiling on the primary
+    model says nothing about whether the fallback model's own, separate
+    budget is also spent — so refusing to even try it was leaving real,
+    unused capacity on the table on exactly the day it mattered most.
+    A bad API key or a genuine network failure should never trigger this —
+    only these two specific, second-model-might-actually-work cases should.
+    """
+
+
+def _parse_retry_seconds(text: str, default: int = 25) -> int:
+    """Pulls a suggested wait time out of Groq's error text if it gives one
+    (e.g. '...try again in 21.5s'), otherwise a reasonable fixed default.
+    Mirrors api_budget.retry_delay_seconds's same reasoning for Gemini:
+    obeying the server's own number beats guessing."""
+    import re
+    m = re.search(r"try again in (\d+(?:\.\d+)?)\s*s", text, re.IGNORECASE)
+    if m:
+        return min(int(float(m.group(1))) + 2, 60)
+    return default
 
 
 def _call_model(model: str, system_prompt: str, user_prompt: str, temperature: float,
-                api_key: str) -> str:
+                api_key: str, _minute_retries: int = 0) -> str:
+    # Caps same-model retries for a per-minute limit at 3 (roughly 25s each
+    # = up to ~75s waited here) before giving up on this model entirely —
+    # a limit that hasn't cleared after that long is behaving more like a
+    # sustained problem than a genuine 60-second window, and this must
+    # never be the thing that hangs a GitHub Actions job indefinitely.
+    MAX_MINUTE_RETRIES = 3
     try:
         resp = requests.post(
             GROQ_ENDPOINT,
@@ -162,15 +205,39 @@ def _call_model(model: str, system_prompt: str, user_prompt: str, temperature: f
             "secret was pasted correctly at https://console.groq.com/keys."
         )
     if resp.status_code == 429:
-        # Groq's free tier is generous (~14,400/day at time of writing) but
-        # not infinite. If even THIS is exhausted, there is genuinely
-        # nothing left to fall back to today.
-        raise RuntimeError(
-            f"Groq's free tier is also exhausted for today ({resp.status_code}): "
-            f"{resp.text[:200]}"
+        # Groq returns 429 for BOTH a per-minute limit (self-resolving in
+        # under a minute) and a genuine per-day limit (nothing left until
+        # tomorrow) — the same fork Gemini's 429s need (see
+        # api_budget.is_per_minute_limit). Real current limits per Groq's
+        # own docs: gpt-oss-120b and gpt-oss-20b each get 1,000
+        # requests/day, 200,000 tokens/day, AND 8,000 tokens/minute,
+        # separately per model. THE BUG THIS FIXES: a per-minute hit used
+        # to immediately burn the fallback model instead of just waiting
+        # the ~20-30 seconds it actually needed — wasting the fallback's
+        # separate daily budget on a problem that was never really about
+        # the daily budget at all.
+        if "per minute" in resp.text.lower() or "tpm" in resp.text.lower() or "rpm" in resp.text.lower():
+            if _minute_retries >= MAX_MINUTE_RETRIES:
+                raise _TryNextModel(
+                    f"Groq model '{model}' is still per-minute rate-limited after "
+                    f"{MAX_MINUTE_RETRIES} waits — trying the other model instead "
+                    f"of waiting further: {resp.text[:200]}"
+                )
+            wait = _parse_retry_seconds(resp.text)
+            print(f"[backup_provider] \u26a0 Groq model '{model}' hit its per-MINUTE limit "
+                  f"(self-resolving) — waiting {wait}s and retrying the SAME model "
+                  f"(attempt {_minute_retries + 1}/{MAX_MINUTE_RETRIES}), not burning "
+                  f"the fallback's separate daily budget on this.")
+            time.sleep(wait)
+            return _call_model(model, system_prompt, user_prompt, temperature, api_key,
+                              _minute_retries=_minute_retries + 1)
+
+        raise _TryNextModel(
+            f"Groq model '{model}' hit its own daily limit (1,000 requests / "
+            f"200,000 tokens per day, separate per model): {resp.text[:200]}"
         )
     if resp.status_code == 404 or "model_not_found" in resp.text.lower():
-        raise _ModelNotFound(
+        raise _TryNextModel(
             f"Groq model '{model}' was not found — it may have been retired. "
             f"Check https://console.groq.com/docs/models for a current free "
             f"model name and set GROQ_MODEL to override the default."

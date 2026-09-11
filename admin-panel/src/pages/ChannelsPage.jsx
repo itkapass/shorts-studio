@@ -17,7 +17,8 @@
 import { useEffect, useState } from 'react'
 import { Plus, Trash2, Save, AlertTriangle, Radio, Hand } from 'lucide-react'
 import { supabase, isSupabaseConfigured } from '../lib/supabase'
-import { PERSONAS, PERSONAS_META } from '../lib/personas'
+import { PERSONAS, PERSONAS_ONLY, PERSONAS_META } from '../lib/personas'
+import { VOICES, RENDER_STYLES } from '../lib/mediaOptions'
 
 const CATEGORIES = [
   { key: 'informative',   label: 'Unknown Facts' },
@@ -34,7 +35,8 @@ const CATEGORIES = [
 
 
 const BLANK = {
-  name: '', handle: '', persona_key: '', categories: [], publish_mode: 'manual',
+  name: '', handle: '', persona_key: '', additional_persona_keys: [], categories: [], publish_mode: 'manual',
+  voice_override: null, render_style_override: null,
   env_suffix: '', daily_cap: 5, priority: 100, is_catchall: false,
   is_enabled: true, notes: '',
 }
@@ -170,6 +172,39 @@ export default function ChannelsPage() {
               </p>
             )}
 
+            <label>
+              Additional personas <span className="muted">(optional — a broad channel can pull from several at once)</span>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                {PERSONAS_ONLY.filter(([key]) => key !== draft.persona_key).map(([key, label]) => {
+                  const on = (draft.additional_persona_keys || []).includes(key)
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      className={`chip${on ? ' on' : ''}`}
+                      onClick={() => {
+                        const current = draft.additional_persona_keys || []
+                        setDraft({
+                          ...draft,
+                          additional_persona_keys: on
+                            ? current.filter(k => k !== key)
+                            : [...current, key],
+                        })
+                      }}
+                    >
+                      {label}
+                    </button>
+                  )
+                })}
+              </div>
+              <p className="hint">
+                Each one picked here gets its own topics invented automatically too — a channel
+                with 3 personas selected effectively becomes 3 domains publishing to one place.
+                Costs 1 extra Gemini request per persona per topic top-up, same as any other
+                channel with that persona attached.
+              </p>
+            </label>
+
             <label>Channel name
               <input value={draft.name}
                      onChange={e => setDraft({ ...draft, name: e.target.value })}
@@ -234,6 +269,27 @@ export default function ChannelsPage() {
                 ))}
               </div>
             </fieldset>
+
+            <label>
+              Voice for this channel <span className="muted">(optional override)</span>
+              <select value={draft.voice_override || ''}
+                      onChange={e => setDraft({ ...draft, voice_override: e.target.value || null })}>
+                {VOICES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </label>
+
+            <label>
+              Visual style for this channel <span className="muted">(optional override)</span>
+              <select value={draft.render_style_override || ''}
+                      onChange={e => setDraft({ ...draft, render_style_override: e.target.value || null })}>
+                {RENDER_STYLES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+              <p className="hint">
+                Example: a health/biology channel usually reads better as Whiteboard Sketch than
+                stock footage — a diagram explains "what a stroke does" far better than a generic
+                clip ever could. Leave blank to let each persona/archetype pick its own default.
+              </p>
+            </label>
 
             <label className="row">
               <input type="checkbox" checked={!!draft.is_catchall}

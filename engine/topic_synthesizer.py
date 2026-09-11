@@ -34,6 +34,7 @@ import re
 from datetime import datetime, timezone
 
 from engine import personas as personas_mod
+from engine import channels as channels_mod
 from engine import concept_memory as cm
 from engine import lenses as lenses_mod
 from engine import api_budget
@@ -476,12 +477,21 @@ def resolve_active_personas(db) -> list:
 
     # ── enabled channels (authoritative — cannot be overridden) ──────────
     try:
-        channels = db.table("channels").select("persona_key, name").eq("is_enabled", True).execute().data or []
+        channels = (
+            db.table("channels").select("persona_key, additional_persona_keys, name")
+            .eq("is_enabled", True).execute().data or []
+        )
         for c in channels:
-            key = c.get("persona_key")
-            if key and personas_mod.get_persona(key):
-                selected[key] = True
-                sources[key] = f"channel '{c.get('name') or key}'"
+            # ALL of the channel's personas, not just the primary one — a
+            # channel deliberately set up to draw from several personas
+            # (e.g. one broad "explain something new" channel spanning
+            # tech_science_explainer + top10_and_facts + everyday_origins)
+            # needs every one of them to actually get topics invented, not
+            # only whichever happens to be listed as primary.
+            for key in channels_mod.persona_keys_for(c):
+                if key and personas_mod.get_persona(key):
+                    selected[key] = True
+                    sources.setdefault(key, f"channel '{c.get('name') or key}'")
     except Exception as e:
         print(f"[topic_synthesizer] \u26a0 Could not read channels: {e}")
 
@@ -530,12 +540,15 @@ def ensure_all_active_persona_pools(db, min_pool: int = MIN_POOL_SIZE, budget_fa
     of the shared default — the same reasoning as per-channel keys for
     script writing, applied to the step before it.
     """
-    from engine import channels as channels_mod
     channels = channels_mod.load_channels(db=db)
 
     results = {}
     for persona_key in resolve_active_personas(db):
-        channel = next((c for c in channels if c.get("persona_key") == persona_key), None)
+        # Membership in the channel's full persona list, not equality with
+        # just the primary — a persona might be one of a channel's several
+        # ADDITIONAL personas, and still needs to spend against that
+        # channel's own key, not silently fall back to the shared default.
+        channel = next((c for c in channels if persona_key in channels_mod.persona_keys_for(c)), None)
         api_key = channels_mod.gemini_key_for(channel) if channel else None
         # Each persona spends against ITS OWN channel's budget, matching the
         # key it actually uses. Counting a comedy-key call against the

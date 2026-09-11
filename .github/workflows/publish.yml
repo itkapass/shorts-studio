@@ -78,6 +78,22 @@ jobs:
           YOUTUBE_CLIENT_ID:      ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET:  ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN:  ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+          # BUGFIX: this step never had these at all. publish_approved.py
+          # calls alerts.youtube_auth_broken() and alerts.daily_quota_reached()
+          # directly — the two alerts that matter most for publishing
+          # specifically — and neither could ever actually send, on any
+          # deployment, because this env block simply never gave the Python
+          # process access to the credentials. Found in the same audit that
+          # caught config.py silently hiding these same secrets everywhere else.
+          TELEGRAM_BOT_TOKEN:     ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:       ${{ secrets.TELEGRAM_CHAT_ID }}
+          SMTP_HOST:              ${{ secrets.SMTP_HOST }}
+          SMTP_PORT:              ${{ secrets.SMTP_PORT }}
+          SMTP_USER:              ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD:          ${{ secrets.SMTP_PASSWORD }}
+          ALERT_EMAIL_TO:         ${{ secrets.ALERT_EMAIL_TO }}
+          VAPID_PRIVATE_KEY:      ${{ secrets.VAPID_PRIVATE_KEY }}
+          VAPID_CLAIM_EMAIL:      ${{ secrets.VAPID_CLAIM_EMAIL }}
         run: |
           python -m engine.publish_approved
 

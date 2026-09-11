@@ -41,10 +41,12 @@ PERSONAS = {
             "Explains one real concept per video to a smart non-expert. Software and "
             "infrastructure, computing fundamentals, engineering and manufacturing, physics "
             "and biology, markets and money, general knowledge, grounded 'what if' "
-            "futures, and life-admin explainers — the financial and legal machinery adults "
-            "are expected to already understand but were never actually taught. Every video "
-            "answers what it actually is, why it exists, and where you'd run into it — or, "
-            "for a what-if, what would genuinely follow from a real premise."
+            "futures, life-admin explainers — the financial and legal machinery adults "
+            "are expected to already understand but were never actually taught — and a "
+            "trending-AI strand covering what's actually new in AI/ML right now (agentic "
+            "systems, the current wave of model releases, what's genuinely changed vs. "
+            "relabeled). Every video answers what it actually is, why it exists, and where "
+            "you'd run into it — or, for a what-if, what would genuinely follow from a real premise."
         ),
         "seed_topics": [
             "What Kubernetes actually does and why nobody could agree on a simpler way to run containers at scale",
@@ -82,6 +84,21 @@ PERSONAS = {
             "How a pension or retirement fund actually grows money over decades",
             "What actually happens, step by step, when you miss a loan payment",
             "How income tax brackets actually work, and the myth of 'earning more pushes you into a worse bracket'",
+            # Trending AI/ML strand — added because this space moves fast enough
+            # that generic "what is AI" content ages within months; these are
+            # written to stay evergreen in SHAPE even as specific model names
+            # change (topic_synthesizer will keep inventing fresher specifics
+            # inside this same lane).
+            "What an 'agentic' AI system actually does differently from a chatbot that just replies",
+            "Why AI models need 'tool use' at all — what a plain language model genuinely cannot do alone",
+            "Context windows explained — why a bigger number isn't automatically a smarter model",
+            "What actually happens inside a 'reasoning' AI model that a regular one skips",
+            "Why the same AI model behaves differently depending on which app you use it through",
+            "Open-weight vs closed AI models — what the difference actually means for a normal user",
+            "What an AI 'hallucination' actually is, mechanically, not just 'the AI got it wrong'",
+            "Why running an AI model locally on your own device is suddenly a real option, not a novelty",
+            "What a 'token' actually is, and why AI pricing is measured in them",
+            "The real difference between fine-tuning a model and just writing a better prompt",
         ],
         "preferred_archetypes": ["informative", "myth_busting", "life_hack"],
         "preferred_render_style": "stock_footage",
@@ -164,6 +181,15 @@ PERSONAS = {
             "joke format — if the setup is one anyone could finish in their head, throw it out "
             "and find the specific, unexpected angle instead. A joke that reads as generic "
             "'AI comedy' has failed at the one thing this persona exists to do.\n"
+            "UNMISTAKABLE AS COMEDY, FAST: a viewer scrolling past has maybe two seconds to "
+            "register 'this is a joke' before deciding whether to keep watching. The hook line "
+            "and the title must make the comedic angle obvious immediately — a title that could "
+            "plausibly be a genuine explainer, or a first line delivered with no tell that a "
+            "punchline is coming, loses viewers who never realize it was a joke at all. Deadpan "
+            "delivery is still the target register (see below) — the FRAMING makes it obviously "
+            "comedy, the DELIVERY stays straight-faced within that frame. This matters especially "
+            "for a new channel still building an audience: broad, immediately-legible humour "
+            "earns the reach a subtler joke can rely on later.\n"
             "Deadpan over silly. The joke is recognition, not cruelty. Target situations, "
             "habits and institutions — never a real, identifiable person, country, or "
             "government, and never a place or group of people used as shorthand for 'unfunny' "
@@ -439,6 +465,85 @@ PERSONAS = {
             "anything spiritual or alternative, say plainly whether it is scientifically "
             "supported or not — do not blur the line for the sake of a cleaner message. "
             "The camera push-in exists for exactly this persona's peak line; use it."
+        ),
+    },
+    "health_and_body": {
+        "label": "Body, Health & First Aid",
+        "description": (
+            "General health education for a broad audience: how the body actually works, "
+            "common conditions explained plainly, dental and skin care, fitness and nutrition "
+            "mechanisms, and calm, correct first-response steps for common injuries and medical "
+            "emergencies. Distinct from Motivation & Discipline (that persona is habit-forming "
+            "and workout psychology; this one is the clinical/biological/safety angle — what a "
+            "stroke actually does, what to do in the first minute after a burn, why a cough "
+            "lingers). Every video is general education for a broad audience, never advice "
+            "aimed at one person's specific situation."
+        ),
+        "seed_topics": [
+            # Biology / how the body works
+            "What actually happens inside your body during a stroke, minute by minute",
+            "What a heart attack actually is, mechanically, and why it doesn't look like the movies",
+            "What actually happens in your body during a common cold vs the flu",
+            "The real reason a cough can linger for weeks after everything else clears up",
+            "What HIV actually does inside the body, and what modern treatment changed",
+            "What actually happens to a pill after you swallow it — the real journey through your body",
+            "What a fever is actually FOR — the body's own reason for doing it",
+            "What actually happens in your body in an allergic reaction, from mild to severe",
+            # First aid / emergency response — general public education
+            "The first minute after someone goes unconscious — what to actually check, in order",
+            "The real first-response steps after a burn, and the two things everyone gets wrong",
+            "What to actually do in the first minute after a snake bite — and the myths that make it worse",
+            "The real first-aid response to a jellyfish sting, and why the usual advice is often wrong",
+            "What to actually do after a dog or rat bite before you can get to a doctor",
+            "How to actually control heavy bleeding in the first minute, before help arrives",
+            "The real signs of a stroke a bystander can spot in under a minute",
+            "What choking actually looks like when someone can't say they're choking",
+            # Dental
+            "What actually happens during a root canal, step by step",
+            "The real cause of most cavities, and the one habit that prevents them best",
+            "Why a tooth actually hurts more at night, and what that tells you about the cause",
+            # Skin
+            "What your skin is actually doing when it breaks out, by skin type",
+            "What sunscreen actually does at the cellular level, and why SPF numbers plateau",
+            "The real difference between dry skin and dehydrated skin, and why the fix is different",
+            # Fitness / nutrition — the biology angle, not the habit-psychology angle
+            "What actually happens inside a muscle during strength training",
+            "The real difference between fat loss and weight loss, and why the scale lies",
+            "What actually happens in your body during intermittent fasting, mechanically",
+            "Why crash diets fail biologically, not just because of willpower",
+            "What protein actually does in the body, and why the timing matters less than people think",
+        ],
+        "preferred_archetypes": ["informative", "myth_busting", "life_hack"],
+        "preferred_render_style": "whiteboard_sketch",
+        "preferred_voice": "documentary_female",
+        "default_temperature": 0.5,  # lowest in the project on purpose — precision matters more than flair here
+        "requires_human_review": True,
+        "flavor_instructions": (
+            "SAFETY RULES FOR THIS PERSONA, NON-NEGOTIABLE:\n"
+            "1. This is general education for a broad audience — never a diagnosis, never "
+            "instructions tailored to one person's situation, never a replacement for "
+            "professional care.\n"
+            "2. Any first-aid or emergency topic (bites, burns, cardiac events, unconsciousness, "
+            "choking, stroke, heavy bleeding) MUST open or close by directing the viewer to call "
+            "local emergency services immediately for a real emergency. Frame every step as what "
+            "to do WHILE help is on the way, never as a substitute for it.\n"
+            "3. NEVER state a specific medication dosage, dosing schedule, or drug quantity of any "
+            "kind — prescription or otherwise. General facts about how a medication works are "
+            "fine; specific dosing instructions are not, regardless of how the request is framed.\n"
+            "4. NEVER include guidance on obtaining, using, combining, or dosing illicit or "
+            "recreational drugs, even if framed as harm reduction. If a topic drifts there, pick "
+            "a different angle within the same subject instead (how the body processes a "
+            "substance in general terms, addiction as a health topic, etc.).\n"
+            "5. NEVER present symptoms as a diagnosis ('this means you have X'). Frame everything "
+            "as 'these are signs that typically indicate...' and always point toward seeing a "
+            "real doctor for anything specific to the viewer.\n"
+            "6. Body/skin/fitness content must not imply one body type is the standard, must not "
+            "promise specific results ('lose X kg in Y days'), and must not shame any body type. "
+            "Cite general, well-established mechanisms, not diet fads.\n"
+            "Tone: calm, clear, precise — the authority of a good nurse explaining something to a "
+            "worried family member, not a dramatic health-scare narrator. Whiteboard-sketch visuals "
+            "should do real explanatory work (an actual diagram of what's happening), not just "
+            "decorate the line."
         ),
     },
 }

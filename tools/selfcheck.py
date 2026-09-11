@@ -485,7 +485,7 @@ def _groq_model_not_retired():
             "2026-06-17 and fully shut down 2026-08-16 — every backup "
             "attempt would fail against a model that no longer exists."
         )
-    if "FALLBACK_GROQ_MODEL" not in src or "_ModelNotFound" not in src:
+    if "FALLBACK_GROQ_MODEL" not in src or "_TryNextModel" not in src:
         raise RuntimeError(
             "backup_provider.py no longer retries a second model name on "
             "'model not found' — a single retired model name can once "
@@ -515,6 +515,198 @@ def _channel_id_resolved_at_generation():
     return "channel_id is resolved with the same routing logic publish time uses, and shown on each card"
 
 
+# ── 26. A per-model rate limit also triggers the fallback, not just 404 ────
+def _groq_429_triggers_fallback():
+    """THE bug that actually fired in production: gpt-oss-120b returned a
+    genuine 429 (its own 200,000 tokens/day ceiling, not a shared account
+    limit), and the fallback to gpt-oss-20b never triggered because only a
+    404 used to count as 'try the other model.' Groq's limits are per-model
+    per their own docs, so a 429 on one model says nothing about whether
+    the other model's separate budget is also spent."""
+    src = open("engine/backup_provider.py", encoding="utf-8").read()
+    if_429 = src.split("if resp.status_code == 429:")[1].split("if resp.status_code == 404")[0]
+    if "_TryNextModel" not in if_429:
+        raise RuntimeError(
+            "the 429 (rate limit) branch no longer raises _TryNextModel — a "
+            "rate limit on the primary model will once again skip the "
+            "fallback model entirely, even though Groq's limits are "
+            "per-model and the fallback's budget is completely separate."
+        )
+    return "a 429 on the primary model now retries the fallback model too, not just a 404"
+
+
+# ── 27. config.get()/require() can't silently hide a real env var again ────
+def _config_never_hides_real_env_vars():
+    """THE most impactful fix this round. config.py's _env dict is a
+    hand-maintained list, and get()/require() used to ONLY check that list
+    — so a real, correctly-set secret was completely unreachable if
+    whoever built the feature reading it forgot to also add a line to
+    _env. Found to have actually happened to seven keys at once: Telegram
+    alerts, email alerts, all three Cloudflare R2 credentials, and the
+    offline Piper TTS path had been structurally broken this entire time,
+    for users who had genuinely configured them correctly. Guards the
+    fallback (get() must fall through to a raw os.getenv() for anything not
+    pre-listed) so a future forgotten _env entry degrades to 'works
+    anyway,' not 'silently invisible for months.'"""
+    src = open("engine/config.py", encoding="utf-8").read()
+    for fn_name, needle in [("get", "_env.get(key) or os.getenv(key)"),
+                            ("require", "_env.get(key) or os.getenv(key)")]:
+        if needle not in src:
+            raise RuntimeError(
+                f"config.py's {fn_name}() no longer falls through to a raw "
+                f"os.getenv() for keys missing from _env — a real, "
+                f"correctly-set secret can once again be completely "
+                f"unreachable just because _env forgot a line for it."
+            )
+    for key in ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "SMTP_HOST", "SMTP_USER",
+               "SMTP_PASSWORD", "ALERT_EMAIL_TO", "R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID",
+               "R2_SECRET_ACCESS_KEY", "R2_PUBLIC_BASE", "STORAGE_BUCKET",
+               "PIPER_MODEL_PATH", "GEMINI_TEMPERATURE"]:
+        if f'"{key}"' not in src:
+            raise RuntimeError(f"{key} is still missing from config.py's _env dict")
+    return "get()/require() fall through to os.getenv(); the 7 previously-unreachable keys are registered"
+
+
+# ── 28. Push notifications: wired into the one place every alert flows through
+def _push_notifications_wired():
+    for f in ["engine/push_notifications.py",
+             "supabase/migrations/005_push_subscriptions.sql",
+             "admin-panel/public/manifest.json",
+             "admin-panel/public/sw.js",
+             "admin-panel/src/components/NotificationSettings.jsx"]:
+        if not os.path.exists(f):
+            raise RuntimeError(f"{f} is missing")
+    alerts_src = open("engine/alerts.py", encoding="utf-8").read()
+    if "push_notifications" not in alerts_src:
+        raise RuntimeError(
+            "engine/alerts.py's alert() no longer calls push_notifications — "
+            "push would stop reaching every event Telegram/email already "
+            "cover (video ready, run failed, quota gone)."
+        )
+    settings_src = open("admin-panel/src/pages/SettingsPage.jsx", encoding="utf-8").read()
+    if "<NotificationSettings" not in settings_src:
+        raise RuntimeError("SettingsPage.jsx imports NotificationSettings but never renders it")
+    return "push notifications flow through the same choke point as Telegram/email"
+
+
+# ── 29. publish.yml can actually send the alerts it triggers ───────────────
+def _publish_workflow_has_alert_secrets():
+    """publish_approved.py calls alerts.youtube_auth_broken() and
+    alerts.daily_quota_reached() directly — the two alerts that matter most
+    for publishing — but the workflow step running that code never had
+    TELEGRAM_BOT_TOKEN/SMTP_*/etc in its env block at all, on any
+    deployment. Not a config.py bug this time; the secret was simply never
+    handed to that specific step."""
+    src = open(".github/workflows/publish.yml", encoding="utf-8").read()
+    step = src.split("Publish approved videos to YouTube")[1].split("Package videos")[0]
+    for key in ["TELEGRAM_BOT_TOKEN", "SMTP_HOST", "ALERT_EMAIL_TO"]:
+        if key not in step:
+            raise RuntimeError(
+                f"publish.yml's main step still doesn't pass {key} — alerts "
+                f"triggered from inside publish_approved.py (YouTube auth "
+                f"broken, daily cap reached) will silently have nothing to send."
+            )
+    return "the publish step can now actually send the alerts its own code triggers"
+
+
+# ── 30. Multi-persona channels actually work end to end ────────────────────
+def _multi_persona_channels():
+    ch_src = open("engine/channels.py", encoding="utf-8").read()
+    if "def persona_keys_for" not in ch_src:
+        raise RuntimeError("channels.py is missing persona_keys_for()")
+    if "persona_key in persona_keys_for(c)" not in ch_src:
+        raise RuntimeError("route() still checks equality with the primary persona_key only")
+    ts_src = open("engine/topic_synthesizer.py", encoding="utf-8").read()
+    if "channels_mod.persona_keys_for(c)" not in ts_src:
+        raise RuntimeError("resolve_active_personas() doesn't consult a channel's full persona list")
+    orch_src = open("engine/orchestrator.py", encoding="utf-8").read()
+    if "channels_mod.persona_keys_for(c)" not in orch_src:
+        raise RuntimeError("budget_for_persona() doesn't consult a channel's full persona list")
+    mig = "supabase/migrations/006_channel_customization.sql"
+    if not os.path.exists(mig):
+        raise RuntimeError(f"{mig} is missing")
+    for col in ["additional_persona_keys", "voice_override", "render_style_override"]:
+        if col not in open(mig, encoding="utf-8").read():
+            raise RuntimeError(f"{mig} doesn't create the {col} column")
+    return "a channel can draw from several personas; routing/topic-invention/budget all honor it"
+
+
+# ── 31. persona.preferred_voice is actually read (was defined, never used) ─
+def _persona_voice_actually_used():
+    """Every persona has had its own preferred_voice since day one — this
+    checks it's actually reachable, not just present in the dict. Also
+    checks the full precedence chain: channel override > persona voice >
+    Settings fallback, and that render_style_override follows the same
+    pattern."""
+    src = open("engine/orchestrator.py", encoding="utf-8").read()
+    if "voice_for_this_video" not in src or 'persona.get("preferred_voice")' not in src:
+        raise RuntimeError(
+            "orchestrator.py no longer resolves a persona's own preferred_voice — "
+            "every video would again use one single global Settings voice "
+            "regardless of which persona/channel it belongs to."
+        )
+    if 'resolved_channel.get("voice_override")' not in src:
+        raise RuntimeError("a channel's voice_override is no longer part of the precedence chain")
+    if 'resolved_channel.get("render_style_override")' not in src:
+        raise RuntimeError("a channel's render_style_override is no longer part of the precedence chain")
+    return "channel override > persona voice > Settings fallback, for both voice and render style"
+
+
+# ── 32. The health persona has real, working safety guardrails ─────────────
+def _health_persona_safety():
+    from engine import personas
+    p = personas.PERSONAS.get("health_and_body")
+    if not p:
+        raise RuntimeError("health_and_body persona is missing")
+    if not p.get("requires_human_review"):
+        raise RuntimeError(
+            "health_and_body doesn't set requires_human_review — AI-generated "
+            "medical/first-aid content could reach YouTube with no human ever "
+            "looking at it, regardless of channel or Settings auto_approve."
+        )
+    rules = p.get("flavor_instructions", "")
+    for phrase in ["emergency services", "NEVER state a specific medication dosage",
+                  "NEVER include guidance on obtaining"]:
+        if phrase not in rules:
+            raise RuntimeError(f"health_and_body's safety rules are missing: {phrase!r}")
+
+    orch = open("engine/orchestrator.py", encoding="utf-8").read()
+    if 'persona.get("requires_human_review")' not in orch:
+        raise RuntimeError(
+            "orchestrator.py no longer checks requires_human_review — the "
+            "safety override for health content is dead code."
+        )
+    return "mandatory human review + dosing/diagnosis/emergency-services guardrails are all live"
+
+
+# ── 33. A publish credentials failure names the specific missing secret ────
+def _credentials_error_is_specific():
+    ch_src = open("engine/channels.py", encoding="utf-8").read()
+    if "def missing_credentials_for" not in ch_src:
+        raise RuntimeError("channels.py is missing missing_credentials_for()")
+    pa_src = open("engine/publish_approved.py", encoding="utf-8").read()
+    if "missing_credentials_for(channel)" not in pa_src:
+        raise RuntimeError(
+            "publish_approved.py went back to a generic 'credentials missing' "
+            "message instead of naming the specific missing secret — this is "
+            "the exact ambiguity that caused a real, hours-long confusion."
+        )
+    return "a credentials failure now names exactly which secret is missing"
+
+
+# ── 34. Groq per-minute limits retry the same model, not the fallback ──────
+def _groq_per_minute_handled():
+    src = open("engine/backup_provider.py", encoding="utf-8").read()
+    if "per minute" not in src.lower() or "MAX_MINUTE_RETRIES" not in src:
+        raise RuntimeError(
+            "backup_provider.py no longer distinguishes a per-minute Groq "
+            "limit from a per-day one — a per-minute hit (self-resolving in "
+            "under a minute) will again immediately burn the fallback "
+            "model's separate daily budget instead of just waiting briefly."
+        )
+    return "a per-minute Groq limit waits and retries the same model; only a per-day limit falls to the other model"
+
+
 if __name__ == "__main__":
     check("Python syntax", _syntax)
     check("Undefined names", _undefined)
@@ -541,6 +733,15 @@ if __name__ == "__main__":
     check("Banner/dialogue collision fixed", _banner_collision_fixed)
     check("Groq model not retired", _groq_model_not_retired)
     check("channel_id resolved at generation time", _channel_id_resolved_at_generation)
+    check("Groq 429 triggers fallback too", _groq_429_triggers_fallback)
+    check("config.py never hides a real env var", _config_never_hides_real_env_vars)
+    check("Push notifications wired", _push_notifications_wired)
+    check("publish.yml has alert secrets", _publish_workflow_has_alert_secrets)
+    check("Multi-persona channels", _multi_persona_channels)
+    check("Persona voice actually used", _persona_voice_actually_used)
+    check("Health persona safety", _health_persona_safety)
+    check("Credentials error is specific", _credentials_error_is_specific)
+    check("Groq per-minute handled", _groq_per_minute_handled)
 
     print()
     for name, detail in PASSED:

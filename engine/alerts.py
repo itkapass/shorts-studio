@@ -115,11 +115,24 @@ def alert(subject: str, body: str, severity: str = "info", force: bool = False) 
     print(f"[alerts] [{severity.upper()}] {subject}\n{body}")
 
     if severity == "info" and not force:
-        return {"telegram": False, "email": False, "logged": True}
+        return {"telegram": False, "email": False, "push": False, "logged": True}
+
+    # Push follows the exact same severity/force gating as Telegram and
+    # email — this is the ONE place every alert-worthy event in the whole
+    # project already flows through (a video's ready, a run failed, quota's
+    # gone), so adding push here is what makes it reach every one of those
+    # events automatically, with no other file needing to change.
+    push_result = {"sent": 0}
+    try:
+        from engine import push_notifications
+        push_result = push_notifications.send_to_all(subject, body[:180], tag=severity)
+    except Exception as e:
+        print(f"[alerts] \u26a0 Push send failed (Telegram/email above are unaffected): {e}")
 
     return {
         "telegram": send_telegram(subject, full, severity),
         "email": send_email(subject, full, severity),
+        "push": push_result.get("sent", 0) > 0,
         "logged": True,
     }
 
@@ -217,14 +230,19 @@ if __name__ == "__main__":
     print("\nChecking what is configured...")
     tg = _telegram_configured()
     em = _email_configured()
+    from engine import push_notifications
+    ps = push_notifications.available()
     print(f"  Telegram: {'configured' if tg else 'NOT configured'}")
     print(f"  Email:    {'configured' if em else 'NOT configured'}")
+    print(f"  Push:     {'configured' if ps else 'NOT configured'}"
+          + ("" if ps else " (no subscribed devices yet is separate — that's normal "
+                            "until someone taps 'Enable Notifications')"))
 
-    if not (tg or em):
-        print("\n  Neither is set up, so there is nothing to test yet — that's fine, "
-              "alerts are optional.")
+    if not (tg or em or ps):
+        print("\n  None of these are set up yet, so there is nothing to test — that's "
+              "fine, alerts are optional.")
         print("  Telegram takes 5 minutes and is free: see docs/08.")
-        print("  You need TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.\n")
+        print("  Push notifications take about 10 minutes: see docs/17.\n")
         # Exit 0, not 1. This check did its job correctly — it determined
         # alerts are not configured, which is a normal, chosen state, not a
         # bug. Exiting 1 here made "Test Alerts" show a red X on the Actions

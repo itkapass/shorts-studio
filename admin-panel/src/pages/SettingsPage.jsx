@@ -4,6 +4,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { Settings, Save, CheckCircle, AlertTriangle, Shield, Mic, Sliders, Info } from 'lucide-react'
+import NotificationSettings from '../components/NotificationSettings'
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState({
@@ -79,6 +80,11 @@ export default function SettingsPage() {
           </div>
         )}
       </div>
+
+      {/* Device-level, not a pipeline setting saved to the database — lives
+          outside the form on purpose, since it acts immediately on THIS
+          browser/device rather than needing a "Save Settings" press. */}
+      <NotificationSettings />
 
       <form onSubmit={handleSave}>
         {/* Voice Profile */}

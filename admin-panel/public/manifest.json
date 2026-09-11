@@ -1,0 +1,14 @@
+{
+  "name": "Shorts Studio",
+  "short_name": "Shorts Studio",
+  "description": "Review, approve, and monitor your AI-generated YouTube Shorts pipeline.",
+  "start_url": "/queue",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0a0e17",
+  "theme_color": "#0a0e17",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

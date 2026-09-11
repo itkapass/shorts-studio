@@ -33,6 +33,7 @@ export const PERSONAS = [
   ['awareness_comedy', 'Awareness Through Comedy'],
   ['everyday_origins', 'Why Ordinary Things Are The Way They Are'],
   ['quotes_and_poetry', 'Tamil Words, Wisdom & Original Lines'],
+  ['health_and_body', 'Body, Health & First Aid'],
 ]
 
 // Personas only (no blank "None" entry) — for pickers where "not selecting
@@ -73,5 +74,11 @@ export const PERSONAS_META = {
     categories: ['informative', 'wholesome', 'myth_busting', 'life_hack'],
     description: 'Tamil proverbs, tongue twisters, folk sayings and slang alongside original '
       + 'aphorisms and short poems — real strands must be genuinely real, original ones genuinely new.',
+  },
+  health_and_body: {
+    categories: ['informative', 'myth_busting', 'life_hack'],
+    description: 'General health education: how the body works, first-aid steps, dental and skin '
+      + 'care, fitness and nutrition mechanisms. Always requires human review before publishing — '
+      + 'never auto-approved, regardless of channel settings.',
   },
 }

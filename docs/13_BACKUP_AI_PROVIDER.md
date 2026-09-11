@@ -4,10 +4,19 @@
 
 When Gemini's daily quota is genuinely gone, the pipeline now automatically
 tries **Groq** (groq.com — a hosting company, unrelated to xAI's "Grok")
-before giving up. Groq's free tier hosts open models like Llama 3.3 70B on
-its own hardware: no credit card, roughly **14,400 requests a day** at time
-of writing — over 700x Gemini's free allowance — and its API is
-OpenAI-compatible, so this project needed no new library to talk to it.
+before giving up. Groq's free tier hosts open models on its own hardware —
+no credit card needed — and its API is OpenAI-compatible, so this project
+needed no new library to talk to it.
+
+**Real current capacity** (verified against console.groq.com/docs/rate-limits,
+corrected here after this project quoted the wrong figure and it caused a
+live failure): the two models this project uses, `openai/gpt-oss-120b` and
+`openai/gpt-oss-20b`, each get **1,000 requests and 200,000 tokens per day —
+separately**. Since a rate limit on one doesn't affect the other, the
+pipeline tries the second automatically if the first is exhausted, giving
+roughly double that combined. That's real, useful headroom for an emergency
+video or two — not the "14,400/day" this doc used to claim, which belongs to
+a different, now-deprecated model.
 
 This is what turns "we can't test anything until midnight Pacific" into
 "the emergency video still gets made, just by a different model."

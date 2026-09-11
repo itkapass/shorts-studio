@@ -95,3 +95,13 @@ tzdata>=2024.1
 # pipeline to run. Remove this line if you'd rather keep installs light and
 # accept the smaller gap it closes.
 sentence-transformers>=3.0.0
+
+# ── Mobile push notifications (optional) ───────────────────────────────────
+# Sends real, OS-level notifications to any device that has enabled them
+# (Settings -> Enable Notifications) via the same event stream that already
+# feeds Telegram/email (engine/alerts.py). Pure Python, no account needed —
+# the credential is a VAPID key pair generated once, not a third-party API
+# key. Degrades gracefully: engine/push_notifications.py checks for a
+# configured VAPID key before ever importing this, so leaving it uninstalled
+# or unconfigured changes nothing else.
+pywebpush>=2.0.0

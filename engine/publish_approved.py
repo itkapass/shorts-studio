@@ -161,12 +161,14 @@ def run_publish_pipeline():
 
                 creds = channels_mod.credentials_for(channel)
                 if not creds:
+                    missing = channels_mod.missing_credentials_for(channel)
+                    detail = f"Missing: {', '.join(missing)}" if missing else "credentials incomplete"
                     alerts.youtube_auth_broken(
                         channel.get("name", "?"),
-                        "The channel's YOUTUBE_* secrets are missing or incomplete.",
+                        f"The channel's YOUTUBE_* secrets are missing or incomplete. {detail}.",
                     )
                     _update_status(db, row["id"], "publish_failed",
-                                   error="Channel credentials missing")
+                                   error=f"Channel credentials missing \u2014 {detail}")
                     continue
 
             video_url = row.get("storage_url")

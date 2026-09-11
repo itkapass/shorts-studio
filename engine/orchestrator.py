@@ -199,7 +199,7 @@ def run_generation_pipeline(manual_count: int = None, skip_topics: bool = False,
     budgets_by_key: dict = {}
 
     def budget_for_persona(persona_key):
-        channel = next((c for c in all_channels if c.get("persona_key") == persona_key), None)
+        channel = next((c for c in all_channels if persona_key in channels_mod.persona_keys_for(c)), None)
         api_key = channels_mod.gemini_key_for(channel) if channel else None
         key_id = (channel.get("env_suffix") or "default") if channel else "default"
         if key_id not in budgets_by_key:
@@ -477,8 +477,17 @@ def run_generation_pipeline(manual_count: int = None, skip_topics: bool = False,
         # row is exactly what makes a channel look automated.
         structure = topic.get("structure") or narrative.pick_structure(archetype, day + i)
 
+        # Resolved here (moved earlier than before) specifically so
+        # render_style's precedence chain below can consult a channel's own
+        # render_style_override — this is what the same routing call already
+        # gets used for at publish time (see the channel_id note further
+        # down), just needed one line earlier this round.
+        resolved_channel = channels_mod.route(archetype, channels=all_channels,
+                                              persona_key=persona_key) if all_channels else None
+
         render_style = (
             topic.get("render_style")
+            or (resolved_channel.get("render_style_override") if resolved_channel else None)
             or (persona.get("preferred_render_style") if persona else None)
             or arch.suggest_style(archetype, default_style)
         )
@@ -493,9 +502,9 @@ def run_generation_pipeline(manual_count: int = None, skip_topics: bool = False,
         # always set correctly, is what publishing actually keys off), but it
         # meant the dashboard had no way to show which channel a video was
         # headed for while it was still Pending/Approved/Rendering — you
-        # could only find out after the fact. Resolving it here, with the
-        # same function publish time uses, means the answer is right there
-        # the moment the video is created, not just after it goes out.
+        # could only find out after the fact. Resolving it (now once, above,
+        # reused here) means the answer is right there the moment the video
+        # is created, not just after it goes out.
         resolved_channel = channels_mod.route(archetype, channels=all_channels,
                                               persona_key=persona_key) if all_channels else None
         resolved_channel_id = (resolved_channel or {}).get("id")
@@ -565,10 +574,30 @@ def run_generation_pipeline(manual_count: int = None, skip_topics: bool = False,
                       f"{script_dup['matched_title']!r}")
                 continue
 
+            # BUGFIX: persona["preferred_voice"] was defined for all 8
+            # personas in personas.py but never actually read anywhere in
+            # this pipeline — every video, regardless of persona, used
+            # whichever single voice happened to be set in Settings. A
+            # tech explainer and a health/safety video sounded identical
+            # because nothing here ever looked at the persona's own choice.
+            #
+            # Full precedence, most specific wins: a channel's own explicit
+            # voice_override (the "these related voices for this channel"
+            # control on the Channels page) beats the persona's own
+            # preferred_voice, which beats the single global Settings
+            # slider — that slider is now only the fallback for topics with
+            # no persona at all (manually added, or from before personas
+            # existed), not something that silently overrides every
+            # persona's own deliberate choice.
+            voice_for_this_video = (
+                (resolved_channel.get("voice_override") if resolved_channel else None)
+                or (persona.get("preferred_voice") if persona else None)
+                or settings.get("voice_profile", "documentary_male")
+            )
             result = _render_pipeline(
                 job_id=job_id,
                 storyboard=storyboard,
-                voice_profile=settings.get("voice_profile", "documentary_male"),
+                voice_profile=voice_for_this_video,
                 branding=branding,
                 render_style=render_style,
                 persona_key=persona_key,
@@ -583,8 +612,21 @@ def run_generation_pipeline(manual_count: int = None, skip_topics: bool = False,
                              f"Quality gates rejected: {quality_gates.summarize(gates)}")
                 continue
 
+            # SAFETY OVERRIDE: a persona can mark itself requires_human_review
+            # (currently just health_and_body) — that beats the global
+            # Settings auto_approve toggle unconditionally. This is
+            # deliberately NOT a channel setting a person could accidentally
+            # leave on Auto and forget about; it lives on the PERSONA
+            # itself, in code, specifically so AI-generated first-aid/medical
+            # content can never reach YouTube without a human actually
+            # looking at it first, no matter how any channel or setting is
+            # configured.
+            video_auto_approve = auto_approve
+            if persona and persona.get("requires_human_review"):
+                video_auto_approve = False
+
             _save_and_finalize(db, result, job_id, topic.get("id"), tone.get("id"), render_style,
-                                auto_approve=auto_approve, archetype=archetype,
+                                auto_approve=video_auto_approve, archetype=archetype,
                                 structure=structure, creative_brief=creative_brief,
                                 persona_key=persona_key, channel_id=resolved_channel_id,
                                 topic_label=topic.get("category") or None)

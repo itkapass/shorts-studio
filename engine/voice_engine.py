@@ -338,21 +338,22 @@ def generate_multi_voice(scenes: list, output_dir: str, job_id: str, default_voi
     THE BUG THIS FIXES: every character's voice used to come ONLY from
     CHARACTER_VOICES (a fixed name -> voice mapping), and that mapping always
     won over `default_voice` whenever a scene had a real character name — which
-    is every scene, since script_generator always fills one in. Settings'
-    "Narration Voice" picker is exactly `default_voice` here, so choosing
-    "male" there did nothing for any character skit: whichever named
-    character had the most lines (very often "cat", CHARACTER_VOICES'
-    only female entry) simply kept speaking in ITS assigned voice regardless
-    of what was chosen in Settings. That is precisely "I set the voice to
-    male and a female voice stayed attached the whole time."
+    is every scene, since script_generator always fills one in. `default_voice`
+    here is whatever orchestrator.py resolved for this specific video (a
+    channel's own voice_override, else the persona's preferred_voice, else
+    the Settings fallback — see that resolution for the full chain), so
+    choosing a voice anywhere in that chain did nothing for a character skit:
+    whichever named character had the most lines (very often "cat",
+    CHARACTER_VOICES' only female entry) simply kept speaking in ITS assigned
+    voice regardless of what was actually chosen. That is precisely "I set
+    the voice to male and a female voice stayed attached the whole time."
 
     Now: the PRIMARY character (whoever has the most scenes — the actual
-    voice a viewer mostly hears) uses the explicit Settings choice when one
-    was made. Anyone else in the scene keeps their fixed CHARACTER_VOICES
-    voice, so a genuine two-character exchange still sounds like two
-    different people — only the dominant, most-heard voice is the one
-    Settings actually controls, which is the one that was silently
-    unreachable before.
+    voice a viewer mostly hears) uses that resolved choice. Anyone else in
+    the scene keeps their fixed CHARACTER_VOICES voice, so a genuine
+    two-character exchange still sounds like two different people — only
+    the dominant, most-heard voice is the one that's actually controllable,
+    which is the one that was silently unreachable before.
     """
     _require_ffmpeg()
     os.makedirs(output_dir, exist_ok=True)

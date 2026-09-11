@@ -87,17 +87,20 @@ def gemini_key_for(channel: dict) -> str | None:
     return os.environ.get(var) or get(var) or get("GEMINI_API_KEY")
 
 
-def credentials_for(channel: dict) -> dict | None:
-    """Resolves a channel's OAuth credentials from the environment.
-
-    A channel with env_suffix 'SCIENCE' reads YOUTUBE_CLIENT_ID_SCIENCE etc.
-    A channel with an empty suffix reads the unsuffixed names, so a single
-    existing channel keeps working with no migration.
+def _youtube_var_status(channel: dict) -> tuple:
+    """Returns (creds_dict_or_None, missing_var_names). Shared by
+    credentials_for() (unchanged yes/no contract, so nothing calling it
+    breaks) and missing_credentials_for() below, which exists specifically
+    so a publish failure can say WHICH secret is missing instead of the
+    generic, unhelpful 'credentials missing' — that used to mean opening
+    this file and reading the log just to find out it was one specific
+    variable (e.g. YOUTUBE_CLIENT_SECRET_COMEDY) that was never added,
+    among three that all sound alike.
     """
     suffix = (channel.get("env_suffix") or "").strip().upper()
     if suffix and not ENV_SUFFIX_RE.match(suffix):
         print(f"[channels] ⚠ Ignoring unsafe env_suffix on '{channel.get('name')}': {suffix!r}")
-        return None
+        return None, [f"(invalid env_suffix: {suffix!r})"]
 
     def var(base):
         return f"{base}_{suffix}" if suffix else base
@@ -106,18 +109,63 @@ def credentials_for(channel: dict) -> dict | None:
     secret = os.environ.get(var("YOUTUBE_CLIENT_SECRET")) or get(var("YOUTUBE_CLIENT_SECRET"))
     token = os.environ.get(var("YOUTUBE_REFRESH_TOKEN")) or get(var("YOUTUBE_REFRESH_TOKEN"))
 
-    if not (cid and secret and token):
-        missing = [
-            var(n) for n, v in (
-                ("YOUTUBE_CLIENT_ID", cid),
-                ("YOUTUBE_CLIENT_SECRET", secret),
-                ("YOUTUBE_REFRESH_TOKEN", token),
-            ) if not v
-        ]
-        print(f"[channels] ⚠ Channel '{channel.get('name')}' is missing secrets: {', '.join(missing)}")
-        return None
+    missing = [
+        var(n) for n, v in (
+            ("YOUTUBE_CLIENT_ID", cid),
+            ("YOUTUBE_CLIENT_SECRET", secret),
+            ("YOUTUBE_REFRESH_TOKEN", token),
+        ) if not v
+    ]
+    if missing:
+        return None, missing
+    return {"client_id": cid, "client_secret": secret, "refresh_token": token}, []
 
-    return {"client_id": cid, "client_secret": secret, "refresh_token": token}
+
+def credentials_for(channel: dict) -> dict | None:
+    """Resolves a channel's OAuth credentials from the environment.
+
+    A channel with env_suffix 'SCIENCE' reads YOUTUBE_CLIENT_ID_SCIENCE etc.
+    A channel with an empty suffix reads the unsuffixed names, so a single
+    existing channel keeps working with no migration.
+    """
+    creds, missing = _youtube_var_status(channel)
+    if missing:
+        print(f"[channels] ⚠ Channel '{channel.get('name')}' is missing secrets: {', '.join(missing)}")
+    return creds
+
+
+def missing_credentials_for(channel: dict) -> list:
+    """Just the list of missing secret names (empty list if nothing's
+    missing) — for callers that want to SAY which one, not just fail."""
+    _, missing = _youtube_var_status(channel)
+    return missing
+
+
+def persona_keys_for(channel: dict) -> list:
+    """A channel's full persona list: its primary persona_key plus any
+    additional_persona_keys, deduplicated, in order.
+
+    WHY THIS EXISTS: a channel used to accept exactly one persona. That was
+    a real limitation for a channel meant to be broad on purpose — "explain
+    something new" naturally spans tech_science_explainer, top10_and_facts,
+    and everyday_origins at once, not just one of them. Every place that
+    used to check `channel.get("persona_key") == some_key` now checks
+    membership in this list instead, so a channel can genuinely draw from
+    several personas' topic invention and accept videos from any of them.
+
+    The primary persona_key field is kept exactly as it was (still the one
+    shown prominently, still what a brand-new channel has after picking one
+    persona in the dropdown) — additional_persona_keys is purely additive,
+    so a channel that never uses it behaves identically to before this existed.
+    """
+    keys = []
+    primary = channel.get("persona_key")
+    if primary:
+        keys.append(primary)
+    for k in (channel.get("additional_persona_keys") or []):
+        if k and k not in keys:
+            keys.append(k)
+    return keys
 
 
 def route(category: str, channels: list = None, db=None, persona_key: str = None) -> dict | None:
@@ -139,7 +187,11 @@ def route(category: str, channels: list = None, db=None, persona_key: str = None
         return None
 
     if persona_key:
-        persona_match = [c for c in channels if c.get("persona_key") == persona_key]
+        # Membership in the channel's FULL persona list (primary +
+        # additional), not just equality with the primary — this is what
+        # actually makes a multi-persona channel receive videos from all of
+        # its personas, not only the one that happens to be "primary".
+        persona_match = [c for c in channels if persona_key in persona_keys_for(c)]
         if persona_match:
             return persona_match[0]
 
