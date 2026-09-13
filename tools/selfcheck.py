@@ -707,6 +707,50 @@ def _groq_per_minute_handled():
     return "a per-minute Groq limit waits and retries the same model; only a per-day limit falls to the other model"
 
 
+# ── 35. Piper (real male-voice offline fallback) is actually installed ─────
+def _piper_actually_installed():
+    """THE root cause of a real, reported bug: edge-tts fails often enough
+    on shared runner IPs that the pipeline regularly falls back past it —
+    and gTTS, the fallback after Piper, has ZERO voice/gender selection at
+    all (one fixed voice). Piper was coded as the middle tier years ago but
+    was never actually installed in any workflow, so every edge-tts
+    failure silently skipped straight to gTTS's fixed voice regardless of
+    what Settings/persona/channel asked for. Guards that the install step
+    exists, uses a voice WITHOUT Piper's documented Ryan-mumbling bug
+    (upstream issue #128), and that voice_engine.py validates the
+    downloaded file size before trusting it — directly observed a failed
+    download silently succeed as a tiny error-page stand-in while building
+    this fix, so this specific safeguard is not theoretical."""
+    for wf in [".github/workflows/generate.yml", ".github/workflows/render-on-demand.yml"]:
+        src = open(wf, encoding="utf-8").read()
+        if "Install Piper TTS" not in src or "PIPER_MODEL_PATH" not in src:
+            raise RuntimeError(f"{wf} no longer installs Piper — gTTS's fixed voice "
+                               f"becomes the only fallback again, silently, on any "
+                               f"edge-tts failure.")
+        if "/en_US/ryan/" in src:
+            raise RuntimeError(f"{wf} downloads the Ryan voice, which Piper's own maintainer "
+                               f"confirmed mumbles specific sentences (upstream issue #128).")
+        if "MODEL_SIZE" not in src:
+            raise RuntimeError(f"{wf} doesn't validate the downloaded model's file size "
+                               f"before trusting it.")
+    ve_src = open("engine/voice_engine.py", encoding="utf-8").read()
+    if "too small to be a real voice" not in ve_src:
+        raise RuntimeError("voice_engine.py's _try_piper no longer sanity-checks the model file size")
+    return "Piper installs a real, working male voice (not the buggy Ryan one) in both rendering workflows"
+
+
+# ── 36. A Gemini refusal reads as a refusal, not a confusing JSON error ────
+def _refusal_distinguished_from_truncation():
+    src = open("engine/script_generator.py", encoding="utf-8").read()
+    if "looks_like_refusal" not in src or "declined to write this topic" not in src:
+        raise RuntimeError(
+            "script_generator.py no longer distinguishes a genuine Gemini refusal "
+            "from truncated/malformed JSON — both would again show as the "
+            "identical, unhelpful 'invalid JSON' error on the Failed tab."
+        )
+    return "a refusal names itself as a refusal; truncated JSON still gets the original diagnostic"
+
+
 if __name__ == "__main__":
     check("Python syntax", _syntax)
     check("Undefined names", _undefined)
@@ -742,6 +786,8 @@ if __name__ == "__main__":
     check("Health persona safety", _health_persona_safety)
     check("Credentials error is specific", _credentials_error_is_specific)
     check("Groq per-minute handled", _groq_per_minute_handled)
+    check("Piper actually installed", _piper_actually_installed)
+    check("Refusal distinguished from truncation", _refusal_distinguished_from_truncation)
 
     print()
     for name, detail in PASSED:

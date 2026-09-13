@@ -39,6 +39,31 @@ jobs:
       - name: Install FFmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
+      # See generate.yml for the full explanation — same offline male-voice
+      # fallback tier, installed here too so a manually-triggered render
+      # gets the same voice reliability as a scheduled one.
+      - name: Install Piper TTS (offline male-voice fallback)
+        continue-on-error: true
+        run: |
+          mkdir -p "$HOME/.piper"
+          curl -sL -o "$HOME/.piper/piper.tar.gz" \
+            "https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_amd64.tar.gz"
+          if [ -s "$HOME/.piper/piper.tar.gz" ]; then
+            tar xzf "$HOME/.piper/piper.tar.gz" -C "$HOME/.piper" --strip-components=1
+          fi
+          curl -sL -o "$HOME/.piper/voice.onnx" \
+            "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/joe/medium/en_US-joe-medium.onnx"
+          curl -sL -o "$HOME/.piper/voice.onnx.json" \
+            "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/joe/medium/en_US-joe-medium.onnx.json"
+          MODEL_SIZE=$(stat -c%s "$HOME/.piper/voice.onnx" 2>/dev/null || echo 0)
+          if [ -x "$HOME/.piper/piper" ] && [ "$MODEL_SIZE" -gt 1000000 ]; then
+            echo "PIPER_MODEL_PATH=$HOME/.piper/voice.onnx" >> "$GITHUB_ENV"
+            echo "$HOME/.piper" >> "$GITHUB_PATH"
+            echo "Piper installed OK ($MODEL_SIZE bytes)."
+          else
+            echo "Piper install did not produce a usable binary+model this run \u2014 that's fine, gTTS is still there as the last resort."
+          fi
+
       - name: Install Python dependencies
         run: pip install -r requirements.txt
 

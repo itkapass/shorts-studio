@@ -104,6 +104,50 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y ffmpeg
 
+      # ── Offline TTS fallback, with a REAL, working male voice ──────────
+      # WHY THIS EXISTS: edge-tts fails often enough on GitHub's shared
+      # runner IPs that the pipeline regularly falls back past it — and the
+      # fallback after Piper, gTTS, has ZERO voice selection at all (one
+      # fixed voice, structurally incapable of sounding male no matter what
+      # Settings says). Piper was already coded as the middle fallback tier
+      # but was never actually installed here, so every edge-tts failure
+      # skipped straight to gTTS's fixed voice. This installs the real
+      # binary and a real male voice model, so "documentary_male" stays
+      # true even when edge-tts has a bad day — not just most of the time.
+      #
+      # Voice: en_US-joe-medium, not the more commonly recommended
+      # en_US-ryan — Piper's own GitHub issue #128 has the maintainer
+      # confirming Ryan mumbles specific sentences due to bad training
+      # data; Joe doesn't have that problem and is an equally real male
+      # voice. Every download is size-checked — an HTML error page saved
+      # as if it were a model file is exactly the kind of silent failure
+      # that would otherwise crash mid-render instead of just skipping to
+      # gTTS the way a missing voice always safely does.
+      - name: Install Piper TTS (offline male-voice fallback)
+        continue-on-error: true  # optional tier — never block the pipeline on this
+        run: |
+          mkdir -p "$HOME/.piper"
+          curl -sL -o "$HOME/.piper/piper.tar.gz" \
+            "https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_amd64.tar.gz"
+          if [ -s "$HOME/.piper/piper.tar.gz" ]; then
+            tar xzf "$HOME/.piper/piper.tar.gz" -C "$HOME/.piper" --strip-components=1
+          fi
+          curl -sL -o "$HOME/.piper/voice.onnx" \
+            "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/joe/medium/en_US-joe-medium.onnx"
+          curl -sL -o "$HOME/.piper/voice.onnx.json" \
+            "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/joe/medium/en_US-joe-medium.onnx.json"
+          # A real voice model is tens of MB; an error page saved to disk
+          # is a few hundred bytes at most — this is what tells the
+          # difference between "downloaded fine" and "downloaded a 404".
+          MODEL_SIZE=$(stat -c%s "$HOME/.piper/voice.onnx" 2>/dev/null || echo 0)
+          if [ -x "$HOME/.piper/piper" ] && [ "$MODEL_SIZE" -gt 1000000 ]; then
+            echo "PIPER_MODEL_PATH=$HOME/.piper/voice.onnx" >> "$GITHUB_ENV"
+            echo "$HOME/.piper" >> "$GITHUB_PATH"
+            echo "Piper installed OK ($MODEL_SIZE bytes)."
+          else
+            echo "Piper install did not produce a usable binary+model this run \u2014 that's fine, gTTS is still there as the last resort."
+          fi
+
       # ── 4. Install Python dependencies ────────────────────────────
       - name: Install Python packages
         run: pip install -r requirements.txt

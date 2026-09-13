@@ -507,6 +507,34 @@ Generate a {num_scenes}-scene storyboard adhering strictly to the JSON schema.
         raw = re.sub(r"\s*```$", "", raw)
         storyboard = json.loads(raw)
     except json.JSONDecodeError as e:
+        # THE BUG THIS FIXES: two genuinely different situations both used
+        # to produce the identical, confusing "invalid JSON" message —
+        # Gemini plainly refusing the topic ("I'm sorry, but I can't
+        # fulfill that request.", which isn't JSON at all and never will
+        # be, no matter how you reparse it) and Gemini's response getting
+        # cut off mid-structure (a genuine truncation, worth knowing about
+        # separately since it points at a token-limit problem, not a
+        # content one). A human skimming the Failed tab could not tell
+        # these apart without opening the raw output and reading closely
+        # every time.
+        stripped = raw.strip().lower()
+        refusal_markers = ("i'm sorry", "i am sorry", "i cannot", "i can't fulfill",
+                           "i can't help with", "i won't be able to", "as an ai")
+        looks_like_refusal = (
+            len(raw) < 300
+            and not raw.startswith(("{", "["))
+            and any(stripped.startswith(m) for m in refusal_markers)
+        )
+        if looks_like_refusal:
+            raise ValueError(
+                f"Gemini declined to write this topic (not a JSON/formatting problem): "
+                f"{raw[:300]!r}\n\n"
+                f"This means something about the topic or tone combination tripped a "
+                f"content filter on Gemini's side. If this keeps happening for the same "
+                f"topic, consider retiring it in Topic Studio rather than retrying — a "
+                f"refusal is a judgment call by the model, not a transient error, and "
+                f"won't be fixed by trying again."
+            )
         raise ValueError(f"Gemini returned invalid JSON: {e}\nRaw output:\n{response.text[:500]}")
 
     # ── Validate top-level keys ────────────────────────────────────────────

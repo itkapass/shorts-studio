@@ -194,6 +194,22 @@ def _try_piper(text, output_path):
     if not model or not os.path.exists(model):
         print("[voice_engine] ⚠ Piper is installed but PIPER_MODEL_PATH is not set or missing.")
         return None
+    # A real Piper voice model is tens of MB; a failed download (an HTML
+    # error page saved as if it were the model) is a few hundred bytes at
+    # most. Directly observed this exact failure mode while wiring up the
+    # install step — a bad URL or a transient host hiccup silently saves a
+    # "Not Found" page instead of raising an error, and Piper would then
+    # fail in a much less clear way deeper in the subprocess call. Checked
+    # here too, not just at install time, so a stale or manually-placed bad
+    # file can't cause that either.
+    try:
+        if os.path.getsize(model) < 1_000_000:
+            print(f"[voice_engine] \u26a0 PIPER_MODEL_PATH points to a file only "
+                  f"{os.path.getsize(model)} bytes \u2014 too small to be a real voice "
+                  f"model (probably a failed download). Skipping Piper.")
+            return None
+    except OSError:
+        return None
     try:
         wav_path = output_path.replace(".mp3", ".wav")
         subprocess.run(
